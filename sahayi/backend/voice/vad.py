@@ -34,7 +34,7 @@ class SileroVAD:
     def __init__(
         self,
         model_path: str = "silero_vad.onnx",
-        threshold: float = 0.5,
+        threshold: float = 0.45,
     ) -> None:
         """Initialise the VAD model.
 

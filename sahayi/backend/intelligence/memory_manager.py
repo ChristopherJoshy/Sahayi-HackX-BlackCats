@@ -16,7 +16,7 @@ from db.database import DatabaseGateway
 from core.ai import OpenAIClient, ThinkingLevel
 from utils.logger import get_logger
 
-_MAX_NOTES = 5
+_MAX_NOTES = 15
 _MEMORY_EXTRACTION_PROMPT = (
     "You are a memory assistant for a warm companion named Sahayi that checks in "
     "on rural Kerala patients. Given the latest conversation turn, extract ONLY "

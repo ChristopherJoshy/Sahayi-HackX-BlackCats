@@ -112,7 +112,6 @@ class Orchestrator:
         # (Kept generous — a single call stays well within the model window so
         # the agent never loses the thread mid-conversation.)
         self.session_history[session_id].append(f"patient:{transcript}")
-
         # Full verbatim history for this call — no compaction that drops context.
         compacted_history = list(self.session_history[session_id])
 
@@ -140,7 +139,7 @@ class Orchestrator:
         # Safety review runs immediately — risk-based routing (research,
         # hypothesis, doctor summary) is fired off in the background so
         # the patient hears a reply without waiting for PubMed / extra LLM calls.
-        safety = await self.safety_agent.review(reply.text, [])
+        safety = await self.safety_agent.review(reply.text, [], language_code=detected_language or patient.get("language", "en-IN"))
         # If the safety agent had to alter the reply, that is a correction we
         # learn from so the companion improves over time.
         if safety.safe_response.strip() != reply.text.strip():

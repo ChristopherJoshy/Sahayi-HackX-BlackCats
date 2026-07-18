@@ -21,6 +21,7 @@ from voice.audio_codec import mulaw_to_pcm16, upsample_8k_to_16k
 from voice.sarvam_stt import SarvamSTTClient
 from voice.sarvam_tts import SarvamTTSClient
 from voice.vad import SileroVAD
+from voice.thinking_sounds import ThinkingSoundManager
 
 @dataclass(slots=True)
 class VoiceSessionState:
@@ -96,6 +97,8 @@ class TwilioVoiceHandler:
         self.settings = get_settings()
         self.stt = SarvamSTTClient(http_client)
         self.tts = SarvamTTSClient(http_client)
+        self.thinking_sounds = ThinkingSoundManager(self.tts)
+        asyncio.create_task(self.thinking_sounds.initialize())
         self.logger = get_logger("sahayi.twilio_handler")
         self.sessions: dict[str, VoiceSessionState] = {}
         self.client = Client(self.settings.twilio_account_sid, self.settings.twilio_auth_token) if self.settings.twilio_account_sid and self.settings.twilio_auth_token else None
@@ -130,6 +133,16 @@ class TwilioVoiceHandler:
             raw_from = form_data.get("From", "")
             phone_number = normalize_phone(str(raw_from))
             patient = await self.database.get_patient_by_phone(phone_number)
+        if not patient:
+            all_patients = await self.database.list_all_patients()
+            if all_patients:
+                patient = all_patients[0]
+                self.logger.warning(
+                    "Caller %s not found in DB. Falling back to demo patient: %s (ID: %d)",
+                    raw_from,
+                    patient.name,
+                    patient.id
+                )
         session_id = str(uuid4())
         if not patient:
             response = VoiceResponse()
@@ -216,7 +229,10 @@ class TwilioVoiceHandler:
                             self._trigger_emergency(state)
                         )
             ready = self._accumulate_audio(state, message)
-            return ("media", None, ready)
+            outbound = None
+            if ready:
+                outbound = self.thinking_sounds.get_thinking_payloads(state.stream_sid, state.patient.get("language", "ml-IN"))
+            return ("media", outbound, ready)
 
         if event == "mark":
             # Twilio confirms our audio finished playing — stop gating input.
@@ -268,7 +284,10 @@ class TwilioVoiceHandler:
 
         if event == "media":
             ready = self._accumulate_audio(state, message)
-            return ("media", None, ready)
+            outbound = None
+            if ready:
+                outbound = self.thinking_sounds.get_thinking_payloads(state.stream_sid, state.patient.get("language", "ml-IN"))
+            return ("media", outbound, ready)
 
         if event == "mark":
             state.last_response_time = datetime.utcnow()
@@ -508,10 +527,30 @@ class TwilioVoiceHandler:
             if state.opening:
                 state.opening = False
                 lang = state.patient.get("language") or "ml-IN"
-                turn_result = await self.orchestrator.handle_turn(
-                    state.patient, state.session_id, "", detected_language=lang, is_opening=True
-                )
-                audio = await self.tts.synthesize(turn_result.reply.text, lang)
+                reply_text = ""
+                try:
+                    turn_result = await self.orchestrator.handle_turn(
+                        state.patient, state.session_id, "", detected_language=lang, is_opening=True
+                    )
+                    reply_text = (turn_result.reply.text or "").strip()
+                except Exception:
+                    self.logger.exception(
+                        "Opening turn failed | session_id=%s — using fallback greeting",
+                        state.session_id,
+                    )
+                # Guarantee the patient always hears a voice: if the model or
+                # TTS returned nothing (empty reply, API hiccup, timeout), fall
+                # back to a deterministic warm opener in their language so the
+                # call never starts with dead air.
+                if not reply_text:
+                    reply_text = self._fallback_opener(state.patient, lang)
+                audio = await self.tts.synthesize(reply_text, lang)
+                if not audio:
+                    # Last-resort: even TTS failed — try the Malayalam default
+                    # opener, which the provider is most likely to render.
+                    audio = await self.tts.synthesize(
+                        self._fallback_opener(state.patient, "ml-IN"), "ml-IN"
+                    )
                 if audio:
                     self._mark_response_sent(state, audio)
                     for _m in self._build_media_payload(state.stream_sid, audio):
@@ -625,6 +664,29 @@ class TwilioVoiceHandler:
             )
         finally:
             state.processing = False
+
+    @staticmethod
+    def _fallback_opener(patient: dict, lang: str | None) -> str:
+        """Deterministic warm opening line if the model/TTS pipeline fails.
+
+        Args:
+            patient: Patient profile dictionary (provides the name).
+            lang: Preferred language code for the opener.
+        Returns:
+            A safe opening sentence in the patient's language.
+        Agent:
+            Voice
+        """
+        name = patient.get("name", "സുഹൃത്തെ")
+        lang = lang or patient.get("language", "ml-IN") or "ml-IN"
+        openers = {
+            "ml-IN": f"{name}, സുഖമാണേല്ലേ? ഇന്ന് എങ്ങനെയുണ്ട്?",
+            "hi-IN": f"{name}, सब ठीक है? आज कैसे हैं आप?",
+            "ta-IN": f"{name}, நலமா? இன்னிக்கி எப்படி இருக்கிங்க?",
+            "te-IN": f"{name}, అల్లి ఉన్నారా? ఈరోజు ఎలా ఉన్నారు?",
+            "kn-IN": f"{name}, ಚೆನ್ನಾಗಿದ್ದೀರಾ? ಇವತ್ತು ಹೇಗಿದ್ದೀರಿ?",
+        }
+        return openers.get(lang, openers["ml-IN"])
 
     @staticmethod
     def _is_red_flag(text: str) -> bool:

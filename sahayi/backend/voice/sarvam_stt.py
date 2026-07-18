@@ -115,31 +115,39 @@ class SarvamSTTClient:
         data = {
             "model": self.settings.sarvam_stt_model or "saaras:v3",
             "language_code": stt_lang,
-            "mode": "transcribe"
+            "mode": "codemix"
         }
 
         try:
-            if self.http_client:
-                response = await self.http_client.post(
-                    "https://api.sarvam.ai/speech-to-text",
-                    headers=headers,
-                    files=files,
-                    data=data,
-                    timeout=5.0,
-                )
-            else:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
+            for attempt in range(2):
+                if self.http_client:
+                    response = await self.http_client.post(
                         "https://api.sarvam.ai/speech-to-text",
                         headers=headers,
                         files=files,
                         data=data,
-                        timeout=5.0,
+                        timeout=self.settings.stt_timeout,
                     )
-            
-            if response.status_code != 200:
-                self.logger.warning("Sarvam STT failed with status %d: %s", response.status_code, response.text)
-                return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": True}
+                else:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            "https://api.sarvam.ai/speech-to-text",
+                            headers=headers,
+                            files=files,
+                            data=data,
+                            timeout=self.settings.stt_timeout,
+                        )
+                
+                if response.status_code in (429, 503) and attempt == 0:
+                    await asyncio.sleep(1.0)
+                    # Needs fresh files object for retry
+                    files = {"file": ("audio.wav", wav_data, "audio/wav")}
+                    continue
+                    
+                if response.status_code != 200:
+                    self.logger.warning("Sarvam STT failed with status %d: %s", response.status_code, response.text)
+                    return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": False}
+                break
 
             res_data = response.json()
             class StructResponse:
@@ -151,11 +159,11 @@ class SarvamSTTClient:
             return self._normalize(StructResponse(res_data), self.settings.sarvam_language)
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
-            self.logger.warning("Sarvam STT timed out after 5 seconds")
-            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": True}
+            self.logger.warning(f"Sarvam STT timed out after {self.settings.stt_timeout} seconds")
+            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": False}
         except Exception:
             self.logger.exception("Sarvam STT REST API call failed")
-            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": True}
+            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": False}
 
     async def transcribe_file(self, file_bytes: bytes, file_name: str, mime_type: str, language_code: str = "auto") -> dict[str, object]:
         """Transcribe an arbitrary audio file using the REST API.
@@ -183,31 +191,38 @@ class SarvamSTTClient:
         data = {
             "model": self.settings.sarvam_stt_model or "saaras:v3",
             "language_code": stt_lang,
-            "mode": "transcribe"
+            "mode": "codemix"
         }
 
         try:
-            if self.http_client:
-                response = await self.http_client.post(
-                    "https://api.sarvam.ai/speech-to-text",
-                    headers=headers,
-                    files=files,
-                    data=data,
-                    timeout=5.0,
-                )
-            else:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
+            for attempt in range(2):
+                if self.http_client:
+                    response = await self.http_client.post(
                         "https://api.sarvam.ai/speech-to-text",
                         headers=headers,
                         files=files,
                         data=data,
-                        timeout=5.0,
+                        timeout=self.settings.stt_timeout,
                     )
-            
-            if response.status_code != 200:
-                self.logger.warning("Sarvam STT file ingest failed with status %d: %s", response.status_code, response.text)
-                return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": True}
+                else:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            "https://api.sarvam.ai/speech-to-text",
+                            headers=headers,
+                            files=files,
+                            data=data,
+                            timeout=self.settings.stt_timeout,
+                        )
+                
+                if response.status_code in (429, 503) and attempt == 0:
+                    await asyncio.sleep(1.0)
+                    files = {"file": (file_name, file_bytes, mime_type)}
+                    continue
+                    
+                if response.status_code != 200:
+                    self.logger.warning("Sarvam STT file ingest failed with status %d: %s", response.status_code, response.text)
+                    return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": False}
+                break
 
             res_data = response.json()
             class StructResponse:
@@ -219,8 +234,8 @@ class SarvamSTTClient:
             return self._normalize(StructResponse(res_data), self.settings.sarvam_language)
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
-            self.logger.warning("Sarvam STT file ingest timed out after 5 seconds")
-            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": True}
+            self.logger.warning(f"Sarvam STT file ingest timed out after {self.settings.stt_timeout} seconds")
+            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": False}
         except Exception:
             self.logger.exception("Sarvam STT file ingest REST API call failed")
-            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": True}
+            return {"text": "", "confidence": 0.0, "language": language_code, "should_repeat": False}

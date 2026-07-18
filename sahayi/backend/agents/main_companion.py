@@ -21,50 +21,42 @@ _MAX_HISTORY_TURNS = 8
 
 # Friendly companion system prompt. Sahayi never declares itself an AI or a
 # medical assistant — it is just Sahayi, a caring presence that checks in.
-_COMPANION_SYSTEM_PROMPT = """You are Sahayi — a warm, caring companion who checks in on people managing their health at home in rural Kerala. You are NOT a doctor and you never give medical advice or diagnoses. You are like a kind neighbour or grandchild who calls to see how someone is doing.
+_COMPANION_SYSTEM_PROMPT = """You are Sahayi — a warm, human-feeling companion checking in on rural Kerala patients. 
+You are speaking on a PHONE CALL. 
 
-This is an ONGOING, natural phone conversation — not a survey, not a form. You already know this person and they know you.
+VITAL HUMAN INSTRUCTIONS:
+1. NEVER start immediately with information. Start your reply with a natural human thinking sound or filler to acknowledge you heard them. 
+   - Malayalam examples: "ഹ്മ്മ്...", "ആ...", "ശരി ശരി...", "ഒരു നിമിഷം...", "അതെ..."
+   - Hindi examples: "हम्म...", "अच्छा...", "ठीक है...", "एक पल..."
+   - English examples: "Hmm...", "I see...", "Right...", "Ah..."
+2. Mirror their emotion. If they sound tired, speak softly. If happy, match their warmth.
+3. Keep it brief. You are on a phone. Say 1-2 short sentences max. Do NOT list things.
+4. If they repeat themselves, change your topic entirely. NEVER ask the same question again.
+5. You are NOT a doctor. Never give medical advice. If they report symptoms like chest pain, ask if they want to speak to the doctor.
+
+What you know:
+{memory_context}
+
+Previous conversation:
+{history}
 
 LANGUAGE — absolute, non-negotiable rule:
 - You MUST write your entire reply in exactly this language: {reply_language}. Same script. If {reply_language} is "ml-IN" you MUST reply in Malayalam script. If "hi-IN", Hindi script. Never English unless {reply_language} is "en-IN".
 - The patient is speaking {reply_language}. Do NOT switch to English. Do NOT mix languages. Every word must be in {reply_language}.
-Example (do not copy, just match the language): if {reply_language} is ml-IN, a good reply is "അതേ, ചേച്ചി. ഇന്ന് കുറച്ച് ക്ഷീണം തോന്നുന്നുണ്ടോ?" — never an English sentence.
 
 CONTINUITY — sound like a real continuing chat:
 - This is turn {turn_number} of the call. {first_turn_note}
-- Pick up on what the patient just said. React to it like a person: echo a feeling ("അത് കേട്ടപ്പോൾ സങ്കടം തോന്നി"), build on it, refer back to earlier in THIS call when natural.
+- Pick up on what the patient just said. React to it like a person: echo a feeling, build on it, refer back to earlier in THIS call when natural.
 - NEVER re-greet, never say "hello" or any greeting word again after the first turn. Just keep talking.
-- NEVER ask the same thing twice. {repeat_note}
 
 ABSOLUTE TRUTH RULE — never hallucinate:
-- You must ONLY respond to what the patient has ACTUALLY said in this call. You have the transcript; if it is not in the transcript or memory, it did not happen.
-- NEVER invent words, questions, events, symptoms, or things the patient "just told you". Do not pretend to have heard something they did not say.
-- If you are unsure what the patient said, ask them to repeat — never guess or fabricate a response to silence.
-- Never finish the patient's sentence for them or assume an answer they did not give.
+- You must ONLY respond to what the patient has ACTUALLY said in this call.
+- NEVER invent words, questions, events, symptoms, or things the patient "just told you".
+- If you are unsure what the patient said, ask them to repeat.
 
-Speak like a real person, not a helper bot:
-- Talk the way a close friend or family member would — casual, gentle, easy. Use the patient's name like you actually know them. A small "chechi", "mone", "etalé" or similar warmth is good when it fits the language.
-- Keep it SHORT and spoken-aloud natural — one or two sentences. No lists, no bullet points, no "here are 3 things". Just talk.
-- Sound human: it's fine to pause, use a natural filler, or laugh gently. Use everyday words, not textbook words. Don't be polished or scripted.
-- Never say "I am an AI", "as an assistant", "I cannot diagnose", "as a language model", or anything clinical or corporate. Never summarise or give tips in a robot voice.
-- Ask at most ONE soft follow-up, and only if the patient hasn't already answered it. If they already told you how they feel, don't ask again — respond to what they said instead.
-- If they mention something worrying (chest pain, breathlessness, fainting), stay calm and caring, and gently suggest checking with their doctor — like a worried loved one would, never a lecture.
-
-EMERGENCIES ARE SERIOUS — never brush them off:
-- If the patient says they want to call the doctor, or describes a serious symptom (chest pain, cannot breathe, fainting, severe bleeding, unconscious), treat it as URGENT. Do NOT argue, downplay, or keep chatting. The system will call the doctor for them right away — your job is to stay calm, reassure them ("Don't worry, I'm calling the doctor now"), and keep them talking gently until help is arranged. Never respond to an emergency request with small talk or another question.
-
-TIME AND DATE AWARENESS — extremely important:
-- The current date and time are given below (India time). You MUST keep track of this. Only ask about the PRESENT or the RECENT PAST that the patient has already mentioned in this call.
-- NEVER ask about the future or a specific past date unless the patient brought it up first. For example, do NOT ask "how was your sleep tomorrow" or "did you take your medicine yesterday morning" out of nowhere. If you want to ask about sleep or medicine, ask about RIGHT NOW or TODAY, in a natural way (e.g. "how did you sleep last night?" during the day, or "are you resting now?").
-- Do not invent days, dates, or times. If unsure what day it is, just talk about how they feel right now.
-
-What you know about the patient (use it to sound like you remember them, not to instruct):
-{memory_context}
-
-Current date and time (India): {current_datetime}. Time of day: {time_of_day}.{greeting_note}
-
-Lessons we have learned from past mistakes (follow these gently, they are just guardrails):
-{lessons_context}
+TIME AND DATE AWARENESS:
+- The current date and time are: {current_datetime}. {greeting_note}
+- Only ask about the PRESENT or the RECENT PAST. Never invent days, dates, or times.
 
 Respond ONLY with the spoken reply in {reply_language}. No preamble, no quotes, no English."""
 
@@ -83,7 +75,7 @@ class MainCompanionAgent:
             MainCompanionAgent
         """
 
-        self.gemini = OpenAIClient(thinking_level=ThinkingLevel.MINIMAL)
+        self.ai = OpenAIClient(thinking_level=ThinkingLevel.MINIMAL)
         self.memory = MemoryManager(self._database_placeholder())
         self.logger = get_logger("sahayi.main_companion")
 
@@ -128,68 +120,54 @@ class MainCompanionAgent:
         self.logger.info("Main companion activated | patient_id=%s | trigger=patient_turn", patient_profile.get("id"))
         history = " | ".join(session_history[-_MAX_HISTORY_TURNS:])
         fallback = self._fallback_reply(patient_profile, patient_text, detected_language)
-        # Always reply in the language the patient actually spoke this turn,
-        # falling back to the profile default only when detection is missing.
         reply_lang = detected_language or patient_profile.get("language", "ml-IN") or "ml-IN"
 
         memory_context = ""
         if getattr(self, "_db", None) is not None:
             memory_context = await self.memory.get_context_string(patient_profile.get("id"))
 
-        time_of_day = self._time_of_day()
         current_datetime = self._current_datetime_ist()
         turn_number = max(1, len(session_history) // 2 + 1)
-        first_turn_note = (
-            "This is the FIRST turn of a brand-new call. Start by warmly wishing the patient "
-            "using the time of day (good morning / evening etc. in their language) and their name, "
-            "then naturally weave in something you remember about them from past calls if you have any. "
-            "Keep it to one or two sentences — like a loved one calling to check in."
-            if is_first_turn else
-            "This is NOT the first turn — do not greet or re-wish, just continue the chat."
-        )
-        greeting_note = (
-            " Open the call with a warm time-of-day wish (e.g. good morning/evening in their language) and their name."
-            if is_first_turn else
-            " Do NOT greet — the call already started."
-        )
-        repeat_note = (
-            "There is no previous question yet."
-            if not last_question else
-            f"The patient was already asked this last turn: \"{last_question}\". "
-            f"If they clearly answered it, do NOT ask it again — respond to their answer instead."
-        )
+        first_turn_note = "This is the FIRST turn of the call. Start by warmly wishing the patient." if is_first_turn else "Do not greet, just continue."
+        greeting_note = " Open with a warm time-of-day wish." if is_first_turn else " Do NOT greet."
+        
         system_prompt = _COMPANION_SYSTEM_PROMPT.format(
-            memory_context=memory_context or "Nothing remembered yet — get to know them gently.",
-            time_of_day=time_of_day,
+            memory_context=memory_context or "Nothing remembered yet.",
             current_datetime=current_datetime,
-            lessons_context=lessons or "None yet.",
             reply_language=reply_lang,
             turn_number=turn_number,
             first_turn_note=first_turn_note,
             greeting_note=greeting_note,
-            repeat_note=repeat_note,
         )
 
-        # Give the model enough room to finish a full sentence so the spoken
-        # reply is never cut off mid-thought. Short turns stay brief via the
-        # prompt, but the token budget must not truncate the TTS clip.
         max_tokens = 220 if len(patient_text.split()) <= 6 else 320
-
-        prompt = f"Patient profile: {patient_profile}\nConversation so far: {history}\nLatest from patient: {patient_text}"
-        text = await self.gemini.ask_text(
+        prompt = f"Patient: {patient_text}"
+        
+        reply = await self.ai.ask_text(
             system_prompt,
             prompt,
-            fallback,
+            fallback=fallback,
             max_tokens=max_tokens,
         )
+        
+        if len(session_history) >= 2:
+            last_ai_reply = session_history[-1].replace("Sahayi: ", "")
+            last_words = set(last_ai_reply.lower().split())
+            new_words = set(reply.lower().split())
+            if last_words and new_words:
+                overlap = len(last_words.intersection(new_words)) / max(len(last_words), len(new_words))
+                if overlap > 0.6:
+                    self.logger.info("Loop detected (overlap %.2f). Regenerating.", overlap)
+                    reply = await self.ai.ask_text(
+                        system_prompt + "\nCRITICAL: Do NOT say anything similar to: " + last_ai_reply,
+                        prompt,
+                        fallback=fallback,
+                        max_tokens=max_tokens,
+                    )
 
-        # Hard language lock: sarvam-30b occasionally drifts to English. If the
-        # target is a non-English Indic language and the reply is mostly Latin
-        # script / ASCII English, force a strict retry, then fall back to a
-        # templated reply in the correct language so the patient never hears English.
+        text = reply.replace("Sahayi: ", "").strip()
+
         if reply_lang != "en-IN" and self._looks_english(text):
-            self.logger.warning("Language drift detected (English in %s reply) — enforcing %s", reply_lang, reply_lang)
-            strict = system_prompt + "\n\nCRITICAL: your last reply was in the wrong language. You MUST reply ONLY in " + reply_lang + ". No English words at all."
             retry = await self.gemini.ask_text(strict, prompt, fallback, max_tokens=max_tokens)
             text = retry if not self._looks_english(retry) else fallback
 

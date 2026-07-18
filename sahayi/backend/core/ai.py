@@ -132,7 +132,8 @@ class OpenAIClient:
         system: str,
         prompt: str,
         fallback: dict[str, Any],
-        thinking_level: ThinkingLevel | None = None
+        thinking_level: ThinkingLevel | None = None,
+        timeout: float = 12.0,
     ) -> dict[str, Any]:
         """Request JSON output from the model with graceful fallback.
 
@@ -171,7 +172,8 @@ class OpenAIClient:
         prompt: str,
         fallback: str,
         thinking_level: ThinkingLevel | None = None,
-        max_tokens: int | None = None
+        max_tokens: int | None = None,
+        timeout: float = 12.0,
     ) -> str:
         """Request free-form text output from the model with graceful fallback.
 
@@ -189,7 +191,7 @@ class OpenAIClient:
         """
 
         level = thinking_level or self.thinking_level
-        text = await self._generate(system, prompt, level, max_tokens)
+        text = await self._generate(system, prompt, level, max_tokens, timeout)
         return text.strip() if text else fallback
 
     async def _generate(
@@ -197,7 +199,8 @@ class OpenAIClient:
         system: str,
         prompt: str,
         thinking_level: ThinkingLevel,
-        max_tokens: int | None = None
+        max_tokens: int | None = None,
+        timeout: float = 12.0
     ) -> str:
         """Call the Sarvam chat completions API (sync SDK, off the event loop).
 
@@ -218,27 +221,23 @@ class OpenAIClient:
         temperature = _THINKING_TEMPERATURES.get(thinking_level, 0.2)
         ceiling = _MODEL_MAX_TOKENS.get(self.model, 4096)
         requested = max_tokens if max_tokens is not None else ceiling
-        # Clamp between the safety floor and the model's allowed ceiling so the
-        # reply is never starved and the request is never rejected for being too large.
         effective_max = max(min(requested, ceiling), _MIN_MAX_TOKENS)
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            # Reasoning is disabled: Sarvam's reasoning mode spends the entire
-            # `max_tokens` budget on `reasoning_content` and returns empty `content`
-            # (finish_reason="length"). Disabling it yields the reply directly and
-            # is faster/cheaper for our conversational + extraction workloads.
-            "reasoning_effort": None,
-            "max_tokens": effective_max,
-        }
-
+        
         try:
-            response = await asyncio.to_thread(self.client.chat.completions, **kwargs)
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                reasoning_effort=None,
+                max_tokens=max_tokens,
+                timeout=timeout
+            )
+            response.raise_for_status()
             return response.choices[0].message.content or ""
         except Exception:
             return ""

@@ -54,6 +54,11 @@ class Settings:
     environment: str
     secret_key: str
     frontend_url: str
+    sarvam_tts_speed: float
+    thinking_sounds_enabled: bool
+    vad_silence_threshold: float
+    tts_timeout: float
+    stt_timeout: float
 
     @property
     def frontend_origins(self) -> tuple[str, ...]:
@@ -144,4 +149,9 @@ def get_settings() -> Settings:
         environment=_read("ENVIRONMENT", "development"),
         secret_key=_read("SECRET_KEY"),
         frontend_url=_read("FRONTEND_URL", "http://localhost:5173"),
+        sarvam_tts_speed=float(_read("SARVAM_TTS_SPEED", "0.92")),
+        thinking_sounds_enabled=_read("THINKING_SOUNDS_ENABLED", "true").lower() == "true",
+        vad_silence_threshold=float(_read("VAD_SILENCE_THRESHOLD", "0.35")),
+        tts_timeout=float(_read("TTS_TIMEOUT", "8.0")),
+        stt_timeout=float(_read("STT_TIMEOUT", "7.0")),
     )

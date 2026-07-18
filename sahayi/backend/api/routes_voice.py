@@ -377,7 +377,11 @@ async def voice_stream(websocket: WebSocket, session_id: str) -> None:
                 )
 
             if immediate:
-                await send_queue.put(immediate)
+                if isinstance(immediate, list):
+                    for m in immediate:
+                        await send_queue.put(m)
+                else:
+                    await send_queue.put(immediate)
 
             if ready:
                 task = asyncio.create_task(_spawn_processing(session_id))

@@ -59,6 +59,8 @@ class SarvamTTSClient:
             "model": self.settings.sarvam_tts_model or "bulbul:v3",
             "output_audio_codec": "mulaw",
             "speech_sample_rate": 8000,
+            "pace": self.settings.sarvam_tts_speed,
+            "enable_preprocessing": True,
         }
 
         try:
@@ -67,7 +69,7 @@ class SarvamTTSClient:
                     "https://api.sarvam.ai/text-to-speech",
                     headers=headers,
                     json=payload,
-                    timeout=5.0,
+                    timeout=self.settings.tts_timeout,
                 )
             else:
                 async with httpx.AsyncClient() as client:
@@ -75,7 +77,7 @@ class SarvamTTSClient:
                         "https://api.sarvam.ai/text-to-speech",
                         headers=headers,
                         json=payload,
-                        timeout=5.0,
+                        timeout=self.settings.tts_timeout,
                     )
             
             if response.status_code != 200:
@@ -89,7 +91,7 @@ class SarvamTTSClient:
             return b""
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
-            self.logger.warning("Sarvam TTS timed out after 5 seconds")
+            self.logger.warning(f"Sarvam TTS timed out after {self.settings.tts_timeout} seconds")
             return b""
         except Exception:
             self.logger.exception("Sarvam TTS REST API call failed")

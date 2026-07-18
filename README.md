@@ -1,107 +1,180 @@
-# SAHAYI
+<div align="center">
+  
+<img src="sahayi_banner.jpg" alt="Sahayi Banner" width="100%" />
 
-**SAHAYI** is an AI-assisted remote patient monitoring platform for rural Kerala.
-A multi-agent backend (FastAPI + Sarvam AI + Gemini Vision) conducts voice
-check-ins with patients over Twilio, surfaces risk and anomalies to doctors on a
-real-time dashboard, and backs every doctor-facing summary with cited RAG / PubMed
-evidence. Built for **HackX** by team *Black Cats*.
+# 🩺 Sahayi
 
-## How it works
+<a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=24&pause=1000&color=20B2AA&center=true&vCenter=true&width=800&lines=The+All-in-One+AI+Healthcare+Assistant;Warm%2C+Human%2C+and+Always+There;Built+for+Rural+India;A+Black+Cats+Project" alt="Typing SVG" /></a>
 
-- **Voice loop** — Patients call in; Sarvam STT auto-detects their language (22
-  Indian languages), the Indic LLM reasons over the patient record and replies in
-  the same language, and TTS reads the response back. No audio is stored, only
-  transcribed text.
-- **Agents** — Each capability (safety, population intelligence, hypothesis,
-  research, etc.) is one agent file under `agents/`. Agents never call each other
-  directly; the orchestrator routes between them. The **Safety Agent runs before
-  every patient-facing response**.
-- **Dashboard** — Doctors see live patients, risk feeds, a knowledge graph, and
-  hypothesis/research panels via a WebSocket connection.
+**By Team Black Cats 🐈‍⬛**
 
-## Repository layout
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-Active-success?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi" />
+  <img src="https://img.shields.io/badge/Frontend-Vite%20%2B%20React-646CFF?style=for-the-badge&logo=vite" />
+  <img src="https://img.shields.io/badge/Voice-Twilio-F22F46?style=for-the-badge&logo=twilio" />
+  <img src="https://img.shields.io/badge/AI-Sarvam%20AI-000000?style=for-the-badge" />
+</p>
 
+</div>
+
+---
+
+## 🌟 Overview
+
+**Sahayi** is an AI-powered, phone-based companion designed specifically to check in on elderly and rural patients managing their health at home. Instead of relying on complicated apps or sterile robotic interfaces, Sahayi speaks to patients via regular phone calls with the warmth, empathy, and conversational fluency of a caring neighbor.
+
+By leveraging advanced Speech-to-Text (STT) and Text-to-Speech (TTS) optimized for Indic languages (like Malayalam and Hindi), combined with a low-latency, heuristic safety pipeline, Sahayi feels entirely human. 
+
+The goal is to bridge the healthcare gap in rural India by providing continuous, proactive monitoring that feels like a friendly chat.
+
+---
+
+## ❗ Problem Statement
+
+Elderly patients, particularly in rural areas, often struggle with modern healthcare technology. Apps are too complex, and traditional "IVR" phone systems are frustrating, slow, and distinctly robotic. When patients live far from clinics, minor symptoms can escalate unnoticed because regular check-ins are logistically impossible for overwhelmed healthcare workers.
+
+Most existing AI voice bots suffer from high latency, unnatural "AI-like" phrasing, and the inability to understand code-mixed speech (e.g., mixing English words into Malayalam). This leads to poor patient engagement and critical health signals being missed.
+
+---
+
+## 💡 Solution
+
+**Sahayi** flips the script by turning the AI into a warm companion. 
+
+It proactively calls patients, uses human-like filler words ("ഹ്മ്മ്...", "I see...") instantly to mask processing latency, and mirrors the patient's emotional state. 
+
+Behind the friendly voice, a sophisticated orchestration engine extracts health signals (e.g., sleep quality, diet, pain), assesses risk using localized medical heuristics, and escalates red-flag symptoms directly to a doctor or emergency contact.
+
+---
+
+## ✨ Core Features
+
+### 🗣️ Ultra-Low Latency Conversational Voice
+- **Instant Human Fillers**: Uses VAD (Voice Activity Detection) to immediately trigger pre-synthesized thinking sounds while the LLM generates the real response.
+- **Code-Mixed Understanding**: Powered by Sarvam AI in `codemix` mode to perfectly understand patients who mix regional languages with English.
+- **Anti-Looping Engine**: Actively monitors conversational patterns to change the topic if the patient gets stuck in a loop, preventing robotic repetition.
+
+### 🧠 Empathetic Intelligence
+- **Emotion Mirroring**: Adjusts tone and pacing based on the patient's current state.
+- **Contextual Memory**: Remembers up to 15 key notes from past conversations to build a continuous, familiar relationship over time.
+
+### 🏥 Clinical Safety & Routing
+- **Risk Assessment Pipeline**: Runs silently in the background of the call, computing risk scores based on the patient's medical history and current signals.
+- **Red-Flag Escalation**: Instantly detects severe symptoms (e.g., chest pain) and seamlessly bridges the patient directly to their doctor or an emergency responder.
+- **Doctor Dashboard**: Provides doctors with a real-time WebSocket dashboard showing patient status, historical risk graphs, and summarized transcripts.
+
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+graph TD
+    classDef user fill:#2d3436,stroke:#74b9ff,stroke-width:2px,color:#fff;
+    classDef agent fill:#0984e3,stroke:#74b9ff,stroke-width:2px,color:#fff;
+    classDef bg fill:#6c5ce7,stroke:#a29bfe,stroke-width:2px,color:#fff;
+    classDef ext fill:#d63031,stroke:#ff7675,stroke-width:2px,color:#fff;
+
+    User((📱 Patient)):::user <-->|Twilio Voice/WhatsApp| TwilioHandler(Twilio Handler):::agent
+    TwilioHandler -->|Audio Stream| VAD{VAD & Filler}
+    VAD -->|Instant Hmmm...| User
+    TwilioHandler <-->|STT / TTS| Sarvam[Sarvam AI API]:::ext
+    TwilioHandler <--> Orchestrator(Core Orchestrator):::agent
+    
+    Orchestrator <--> Companion(Main Companion):::agent
+    Companion <--> LLM[Gemini/Sarvam LLM]:::ext
+    Companion <--> Memory(Memory Manager):::bg
+    
+    Orchestrator -.->|Async| Safety(Heuristic Safety Agent):::bg
+    Orchestrator -.->|Async| Risk(Risk & Signal Extraction):::bg
+    Orchestrator -.->|Async| Notify(Doctor/Relative Notifier):::bg
+    
+    Notify --> DB[(SQLite Database)]
+    Notify --> WS[WebSocket Dashboard]
+    WS --> Doctor((👨‍⚕️ Doctor)):::user
 ```
-sahayi/
-  backend/        FastAPI service (Python)
-    main.py       App entrypoint, scheduler, routers
-    api/          Route modules (voice, dashboard, patients)
-    agents/       One file per agent
-    intelligence/ All business logic
-    db/           db/database.py is the ONLY DB access point
-    rag/          Vector store + PubMed client
-    voice/        Twilio / STT / TTS
-    contracts/    Pydantic models
-    seed.py       Loads demo patient (Thankamma)
-    tests         test_*.py standalone scripts
-  frontend/       Vite + React app
-    src/pages/      Screens
-    src/components/ UI
-    src/hooks/      Stateful logic
-    src/api/        Backend calls
-    src/auth/       Firebase auth
+
+---
+
+## 🛠️ Technology Stack
+
+| Layer | Technology | Description |
+|---|---|---|
+| **Frontend** | Vite, React, TailwindCSS | Real-time doctor dashboard with dynamic risk plotting. |
+| **Backend** | FastAPI, Python 3 | Async orchestration, WebSocket handling, and background task management. |
+| **Telephony** | Twilio | Real-time media streams and WhatsApp integration. |
+| **Voice AI (STT/TTS)** | Sarvam AI | Specialized Indic language speech models optimized for telephony. |
+| **Intelligence** | LangChain, Gemini, OpenAI | LLM orchestration for persona maintenance, extraction, and safety. |
+| **Database** | SQLite, SQLAlchemy | Relational storage for patient records, signals, and session history. |
+
+---
+
+## 📂 Project Structure
+
+```text
+Sahayi-HackX/
+├── sahayi/
+│   ├── backend/
+│   │   ├── agents/           # LLM logic (Companion, Safety, Risk, WhatsApp)
+│   │   ├── api/              # FastAPI routes and WebSocket handlers
+│   │   ├── core/             # Application config and LLM clients
+│   │   ├── db/               # SQLAlchemy models and SQLite database
+│   │   ├── intelligence/     # Business logic, memory management, scoring
+│   │   ├── voice/            # Twilio media stream handler, VAD, STT, TTS
+│   │   └── main.py           # Application entrypoint
+│   └── frontend/             # React Vite web application
+├── AGENTS.md                 # Agent behavior guidelines
+└── README.md                 # You are here!
 ```
 
-## Prerequisites
+---
 
-- Python 3.11+
-- Node.js 18+
-- API keys for **Sarvam AI** (text LLM + Malayalam STT/TTS), **Gemini** (cheap vision only), and **Twilio**
+## ⚙️ Setup & Installation
 
-## Backend setup
+### 1. Prerequisites
+Ensure you have Python 3.10+ and Node.js installed.
 
-```powershell
-cd sahayi/backend
+### 2. Clone the Repository
+```bash
+git clone https://github.com/ChristopherJoshy/Sahayi-HackX-BlackCats.git
+cd Sahayi-HackX/sahayi
+```
+
+### 3. Backend Setup
+```bash
+cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+# Activate virtual environment (Windows)
+.\.venv\Scripts\activate
+# Install dependencies
 pip install -r requirements.txt
-cp .env.example .env        # then fill in your keys
-python seed.py              # creates + seeds sahayi.db
+```
+
+### 4. Environment Variables
+Copy `.env.example` to `.env` in the `backend` directory and add your keys:
+```env
+TWILIO_ACCOUNT_SID=your_sid
+TWILIO_AUTH_TOKEN=your_token
+SARVAM_API_KEY=your_sarvam_key
+GEMINI_API_KEY=your_gemini_key
+```
+
+### 5. Run the Servers
+**Backend:**
+```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+*(Optionally run `python seed.py` to populate test patients).*
 
-Verify it is up:
-
-```
-GET http://127.0.0.1:8000/health
-```
-
-Useful scripts:
-- `python seed.py` — create the DB and load the demo patient.
-- `python reset_db.py` / `python fix_db.py` — manage the local SQLite DB.
-- `python test_api.py` (also `test_fastapi.py`, `test_payload.py`,
-  `test_empty_payload.py`, `test_fastapi_override.py`) — run from `sahayi/backend/`.
-
-## Frontend setup
-
-```powershell
-cd sahayi/frontend
+**Frontend:**
+```bash
+cd ../frontend
 npm install
-cp .env.example .env        # set VITE_API_BASE_URL / VITE_WS_URL to your backend
 npm run dev
 ```
 
-Build (minimum pre-merge sanity check): `npm run build`.
+---
 
-## Configuration
-
-Copy `.env.example` in **both** `sahayi/backend/` and `sahayi/frontend/`. Never
-commit `.env`. The backend `.env.example` documents every variable: Sarvam text
-LLM + STT/TTS (`SARVAM_LLM_MODEL`, e.g. `sarvam-30b`; STT auto-detects the
-spoken language), Gemini key for **cheap vision only** (`GEMINI_VISION_MODEL`,
-e.g. `gemini-2.0-flash-lite`; Sarvam has no vision), Twilio numbers + webhook
-base (ngrok during dev), SQLite `DATABASE_URL`, Chroma persistence, and
-risk-scoring thresholds. Auth is shared-token based (`DASHBOARD_SHARED_TOKEN`);
-no Firebase in MVP.
-
-## Hard rules (for contributors)
-
-See `AGENTS.md` and `sahayi/backend/rules.md`. The non-negotiables:
-
-- Agents never call each other directly — only via the orchestrator.
-- All business logic in `intelligence/`; all DB access through `db/database.py`.
-- Safety Agent runs before every patient-facing response.
-- Doctor summaries are **observational, never diagnostic**; risk scores must show
-  the formula; RAG / PubMed results must be cited.
-- When editing the backend, create `requests/request{id}.md` (increment `id`) and
-  commit it (per `GEMINI.md`).
+<div align="center">
+  <p>Built with ❤️ by Team Black Cats for HackX</p>
+</div>

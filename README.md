@@ -20,13 +20,21 @@
 
 ---
 
+## 📊 Live System Telemetry
+
+Here is a live simulation of the Sahayi voice stream orchestrator. Notice the real-time VAD detection spikes and telemetry wave representing low-latency signal extraction:
+
+<div align="center">
+  <img src="sahayi_flow.svg" alt="Sahayi Live Orchestration Flow" width="85%" />
+</div>
+
+---
+
 ## 🌟 Overview
 
 **Sahayi** is an AI-powered, phone-based companion designed specifically to check in on elderly and rural patients managing their health at home. Instead of relying on complicated apps or sterile robotic interfaces, Sahayi speaks to patients via regular phone calls with the warmth, empathy, and conversational fluency of a caring neighbor.
 
 By leveraging advanced Speech-to-Text (STT) and Text-to-Speech (TTS) optimized for Indic languages (like Malayalam and Hindi), combined with a low-latency, heuristic safety pipeline, Sahayi feels entirely human. 
-
-The goal is to bridge the healthcare gap in rural India by providing continuous, proactive monitoring that feels like a friendly chat.
 
 ---
 
@@ -66,32 +74,119 @@ Behind the friendly voice, a sophisticated orchestration engine extracts health 
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ Detailed Pipeline & System Architecture
+
+### 1. Real-Time Voice Turn Processing Pipeline (Sequence Diagram)
+Below is the highly detailed sequence of events mapping how audio streams, VAD triggers, prompt logic, and safety filters run concurrently to reduce perceived AI delay:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Patient as 📱 Patient
+    participant Twilio as 📞 Twilio Stream
+    participant VAD as 🎙️ VAD & Filler Manager
+    participant STT as 📝 Sarvam STT
+    participant Orch as 🧠 Orchestrator
+    participant Companion as 🤖 Main Companion Agent
+    participant Safety as 🛡️ Heuristic Safety Agent
+    participant TTS as 🔊 Sarvam TTS
+    participant Intel as 📊 Downstream Analytics
+
+    Patient->>Twilio: Speaks into call
+    Twilio->>VAD: Stream raw mu-law audio
+    Note over VAD: Accumulates chunks. VAD threshold: 0.35
+    VAD->>VAD: Detects Patient stopped speaking
+    
+    par Play Thinking Filler (Latency Masking)
+        VAD->>Twilio: Immediately send pre-cached "hmmm..." / "ശരി..." audio
+        Twilio->>Patient: Play human thinking filler sound
+    and Transcribe & Process Turn
+        VAD->>STT: Post wav buffer (mode=codemix, 8kHz)
+        STT-->>Orch: Return text transcription & language
+        Orch->>Companion: respond(history, text, language)
+        Companion->>Companion: Analyze loop detection (overlap threshold >60%)
+        Companion-->>Orch: Return warm companion text
+        Orch->>Safety: review(response_text) (Sub-millisecond regex heuristics)
+        Safety-->>Orch: Return safe checked response
+        Orch->>TTS: synthesize(safe_text, pace=0.92, language)
+        TTS-->>Twilio: Stream audio frames
+    end
+
+    Twilio->>Patient: Play final response seamlessly
+    
+    par Run Downstream Analytics (Async Background)
+        Orch->>Intel: extract_signals(transcript)
+        Intel->>Intel: Calculate Risk Score (incorporating history & severity)
+        Intel->>Intel: Update Doctor Dashboard (WebSockets)
+    end
+```
+
+---
+
+### 2. Functional System Diagram
+This diagram shows how FastAPI services, WebSockets, background tasks, and AI engines communicate securely:
 
 ```mermaid
 graph TD
-    classDef user fill:#2d3436,stroke:#74b9ff,stroke-width:2px,color:#fff;
-    classDef agent fill:#0984e3,stroke:#74b9ff,stroke-width:2px,color:#fff;
-    classDef bg fill:#6c5ce7,stroke:#a29bfe,stroke-width:2px,color:#fff;
-    classDef ext fill:#d63031,stroke:#ff7675,stroke-width:2px,color:#fff;
+    classDef client fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#fff;
+    classDef voice fill:#311b92,stroke:#b39ddb,stroke-width:2px,color:#fff;
+    classDef agent fill:#0d47a1,stroke:#90caf9,stroke-width:2px,color:#fff;
+    classDef store fill:#1b5e20,stroke:#a5d6a7,stroke-width:2px,color:#fff;
+    classDef process fill:#e65100,stroke:#ffcc80,stroke-width:2px,color:#fff;
 
-    User((📱 Patient)):::user <-->|Twilio Voice/WhatsApp| TwilioHandler(Twilio Handler):::agent
-    TwilioHandler -->|Audio Stream| VAD{VAD & Filler}
-    VAD -->|Instant Hmmm...| User
-    TwilioHandler <-->|STT / TTS| Sarvam[Sarvam AI API]:::ext
-    TwilioHandler <--> Orchestrator(Core Orchestrator):::agent
+    subgraph Client Space
+        Patient((📱 Patient Call)):::client
+        Doctor((👨‍⚕️ Doctor Dashboard)):::client
+    end
+
+    subgraph Telephony & Ingestion Layer
+        Twilio[Twilio Voice Stream]:::voice
+        VAD[VAD / Silence Detector]:::voice
+        Think[Thinking Sounds Manager]:::voice
+    end
+
+    subgraph FastAPI Core Service
+        WS[WebSocket Manager]:::agent
+        Orch[Core Orchestrator]:::agent
+        Comp[Companion Agent]:::agent
+        Saf[Heuristic Safety Agent]:::agent
+        STT[Sarvam STT Client]:::agent
+        TTS[Sarvam TTS Client]:::agent
+    end
+
+    subgraph Background Analytics Pipeline
+        Risk[Risk Scoring Engine]:::process
+        Sig[Signal Extractor]:::process
+        Rel[Relative Alert Dispatcher]:::process
+    end
+
+    subgraph Storage Layer
+        DB[(SQLite Database)]:::store
+        Mem[(Memory Manager)]:::store
+    end
+
+    %% Audio flow
+    Patient <-->|SIP/PSTN| Twilio
+    Twilio -->|Audio Packets| VAD
+    VAD -->|VAD Trigger| Think
+    Think -->|Inject "Hmm..."| Twilio
+    VAD -->|Voice Buffer| STT
     
-    Orchestrator <--> Companion(Main Companion):::agent
-    Companion <--> LLM[Gemini/Sarvam LLM]:::ext
-    Companion <--> Memory(Memory Manager):::bg
-    
-    Orchestrator -.->|Async| Safety(Heuristic Safety Agent):::bg
-    Orchestrator -.->|Async| Risk(Risk & Signal Extraction):::bg
-    Orchestrator -.->|Async| Notify(Doctor/Relative Notifier):::bg
-    
-    Notify --> DB[(SQLite Database)]
-    Notify --> WS[WebSocket Dashboard]
-    WS --> Doctor((👨‍⚕️ Doctor)):::user
+    %% Processing flow
+    STT -->|Transcript| Orch
+    Orch <-->|History & Prompts| Comp
+    Comp <-->|Context Retrieval| Mem
+    Orch -->|Fast Review| Saf
+    Saf -->|Safe Output| TTS
+    TTS -->|Outbound Speech| Twilio
+
+    %% Async processing
+    Orch -.->|Background Task| Sig
+    Sig -->|Signals| Risk
+    Risk -->|Elevated Alerts| Rel
+    Risk -->|Save State| DB
+    Risk -.->|Telemetry Broadcast| WS
+    WS <-->|WebSockets| Doctor
 ```
 
 ---
@@ -123,6 +218,8 @@ Sahayi-HackX/
 │   │   ├── voice/            # Twilio media stream handler, VAD, STT, TTS
 │   │   └── main.py           # Application entrypoint
 │   └── frontend/             # React Vite web application
+├── sahayi_flow.svg           # Telemetry Wave SVG (Github Animation)
+├── sahayi_banner.jpg         # Majestic header banner image
 ├── AGENTS.md                 # Agent behavior guidelines
 └── README.md                 # You are here!
 ```

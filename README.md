@@ -26,9 +26,9 @@
 
 | Core Service | Status | Latency (P50) | Region |
 | :--- | :--- | :--- | :--- |
-| 🎙️ **Voice Stream Gateway** | <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/success.svg" height="20" /> **Operational** | ~12ms | India South |
-| 🧠 **Indic LLM Orchestration** | <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/success.svg" height="20" /> **Operational** | ~140ms | India South |
-| 🛡️ **Heuristic Safety Pipeline** | <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/success.svg" height="20" /> **Operational** | < 1ms | Edge |
+| 🎙️ **Voice Stream Gateway** | ![Operational](https://img.shields.io/badge/-Operational-success?style=flat-square) | `~12ms` | India South |
+| 🧠 **Indic LLM Orchestration** | ![Operational](https://img.shields.io/badge/-Operational-success?style=flat-square) | `~140ms` | India South |
+| 🛡️ **Heuristic Safety Pipeline** | ![Operational](https://img.shields.io/badge/-Operational-success?style=flat-square) | `< 1ms` | Edge |
 
 </div>
 

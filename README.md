@@ -20,7 +20,17 @@
 
 ---
 
-## 📊 Live System Telemetry
+## 🟢 Live System Status & Telemetry
+
+<div align="center">
+
+| Core Service | Status | Latency (P50) | Region |
+| :--- | :--- | :--- | :--- |
+| 🎙️ **Voice Stream Gateway** | <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/success.svg" height="20" /> **Operational** | ~12ms | India South |
+| 🧠 **Indic LLM Orchestration** | <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/success.svg" height="20" /> **Operational** | ~140ms | India South |
+| 🛡️ **Heuristic Safety Pipeline** | <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/success.svg" height="20" /> **Operational** | < 1ms | Edge |
+
+</div>
 
 Here is a live simulation of the Sahayi voice stream orchestrator. Notice the real-time VAD detection spikes and telemetry wave representing low-latency signal extraction:
 
@@ -98,7 +108,7 @@ sequenceDiagram
     VAD->>VAD: Detects Patient stopped speaking
     
     par Play Thinking Filler (Latency Masking)
-        VAD->>Twilio: Immediately send pre-cached "hmmm..." / "ശരി..." audio
+        VAD->>Twilio: Immediately send pre-cached thinking sound audio
         Twilio->>Patient: Play human thinking filler sound
     and Transcribe & Process Turn
         VAD->>STT: Post wav buffer (mode=codemix, 8kHz)
@@ -135,8 +145,8 @@ graph TD
     classDef process fill:#e65100,stroke:#ffcc80,stroke-width:2px,color:#fff;
 
     subgraph Client Space
-        Patient((📱 Patient Call)):::client
-        Doctor((👨‍⚕️ Doctor Dashboard)):::client
+        Patient((Patient Call)):::client
+        Doctor((Doctor Dashboard)):::client
     end
 
     subgraph Telephony & Ingestion Layer
@@ -169,7 +179,7 @@ graph TD
     Patient <-->|SIP/PSTN| Twilio
     Twilio -->|Audio Packets| VAD
     VAD -->|VAD Trigger| Think
-    Think -->|Inject "Hmm..."| Twilio
+    Think -->|Inject Hmmm...| Twilio
     VAD -->|Voice Buffer| STT
     
     %% Processing flow

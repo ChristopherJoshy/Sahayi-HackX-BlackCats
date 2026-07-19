@@ -284,6 +284,42 @@ def test_pivots_to_new_topic_when_stalled():
            "new" in sys_prompt["s"].lower()
 
 
+# ---------------------------------------------------------------------------
+# 14. NO FIXED FILLER — prompt bans "Okay brother"/"ശരി, ചേട്ടാ" openings
+# ---------------------------------------------------------------------------
+def test_prompt_bans_fixed_filler():
+    agent = _make_agent()
+    sys_prompt = {}
+
+    def brain(system, prompt, fallback, **kw):
+        sys_prompt["s"] = system
+        return "ശരി ചേട്ടാ."
+
+    _set_brain(brain)
+    asyncio.run(_turn(agent, PATIENT, ["patient:സുഖം"], "സുഖം", lang="ml-IN", is_first=False))
+    # Prompt must forbid starting every reply with the robotic "Okay brother" filler.
+    assert "filler" in sys_prompt["s"].lower() or "ചേട്ടാ" in sys_prompt["s"] or "brother" in sys_prompt["s"].lower()
+
+
+# ---------------------------------------------------------------------------
+# 15. CURRENT TURN WINS — prompt prioritises what the patient just said
+# ---------------------------------------------------------------------------
+def test_prompt_prioritises_current_turn():
+    agent = _make_agent()
+    sys_prompt = {}
+
+    def brain(system, prompt, fallback, **kw):
+        sys_prompt["s"] = system
+        return "അതെ."
+
+    _set_brain(brain)
+    asyncio.run(_turn(agent, PATIENT, ["patient:വീട്ടിൽ പൂച്ച ഉണ്ട്"], "വീട്ടിൽ പൂച്ച ഉണ്ട്", lang="ml-IN", is_first=False))
+    # The prompt must make the CURRENT patient turn the top priority and tell the
+    # model to drop a stale topic when the patient moves on / shows disinterest.
+    s = sys_prompt["s"].lower()
+    assert "current" in s or "golden rule" in s or "move on" in s or "disinterest" in s
+
+
 if __name__ == "__main__":
     for name in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         name()

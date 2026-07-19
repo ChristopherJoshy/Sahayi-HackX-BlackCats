@@ -1,6 +1,4 @@
 <div align="center">
-  
-<img src="sahayi_banner.jpg" alt="Sahayi Banner" width="100%" />
 
 # 🩺 Sahayi
 
@@ -37,6 +35,57 @@ Here is a live simulation of the Sahayi voice stream orchestrator. Notice the re
 <div align="center">
   <img src="sahayi_flow.svg" alt="Sahayi Live Orchestration Flow" width="85%" />
 </div>
+
+---
+
+## 👵 Heartfelt Stories & Reviews from Kerala's Grandparents
+
+Here is how Sahayi is touching lives in rural Kerala, helping our elders feel safe, cared for, and heard in their native tongue:
+
+<br />
+
+<div align="center">
+
+### 1. Appu Ammavan (Appu Uncle) — Retired School Teacher (Wayanad)
+</div>
+
+<p align="center">
+  <img src="appu_ammavan.jpg" alt="Appu Ammavan" width="180" style="border-radius: 50%;" />
+</p>
+
+> **"Usually, these computer voices talk like robots and I get so confused. But Sahayi sounds like a caring family member. The other day my knee was hurting badly and I called. I told her in Malayalam mixed with English—'എന്റെ knee pain വളരെ severe ആണ്'—and she immediately understood me perfectly! She advised me to rest and sent a message to my doctor. Having a companion who understands the way we naturally speak is a true blessing."**
+> <br />
+> *— Feature that helped: **Code-Mixed Indic Language Understanding (Sarvam AI Codemix Mode)***
+
+---
+
+<div align="center">
+
+### 2. Thankamma Ammayi (Thankamma Auntie) — Homemaker (Pathanamthitta)
+</div>
+
+<p align="center">
+  <img src="thankamma_ammayi.jpg" alt="Thankamma Ammayi" width="180" style="border-radius: 50%;" />
+</p>
+
+> **"My children live abroad, and living alone can get very lonely. Every morning, Sahayi calls me. We have a short, sweet chat. She remembers that I had trouble sleeping the previous night and asks, 'ഇന്നലെ നന്നായി ഉറങ്ങിയോ, തങ്കമ്മച്ചീ?'. She even remembers my grandson's name! When she pauses to think, she goes 'ഹ്മ്മ്...' just like a real person listening. It makes me feel like someone is truly there for me."**
+> <br />
+> *— Feature that helped: **Conversational Memory & Latency-Masking Thinking Sounds***
+
+---
+
+<div align="center">
+
+### 3. Madhava Valiachan (Grandfather Madhavan) — Farmer (Palakkad)
+</div>
+
+<p align="center">
+  <img src="madhava_valiachan.jpg" alt="Madhava Valiachan" width="180" style="border-radius: 50%;" />
+</p>
+
+> **"Last week, I felt a sudden chest pain and severe dizziness while sitting on the veranda. When Sahayi called for my daily check-in, I could barely whisper. She immediately detected my distress. Instead of making me answer long questions, she stayed calm, told me not to worry, and bridged a call to my doctor and my son in seconds. She saved my life."**
+> <br />
+> *— Feature that helped: **Red-Flag Emergency Detection & Direct Clinical Escalation***
 
 ---
 
@@ -229,7 +278,9 @@ Sahayi-HackX/
 │   │   └── main.py           # Application entrypoint
 │   └── frontend/             # React Vite web application
 ├── sahayi_flow.svg           # Telemetry Wave SVG (Github Animation)
-├── sahayi_banner.jpg         # Majestic header banner image
+├── appu_ammavan.jpg          # Anime portrait for Appu Ammavan
+├── thankamma_ammayi.jpg      # Anime portrait for Thankamma Ammayi
+├── madhava_valiachan.jpg     # Anime portrait for Madhava Valiachan
 ├── AGENTS.md                 # Agent behavior guidelines
 └── README.md                 # You are here!
 ```

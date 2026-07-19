@@ -402,5 +402,5 @@ npm run dev
 ---
 
 <div align="center">
-  <p>Built with ❤️ by Team Black Cats for HackX</p>
+  <p>Built with ❤️ by Team Black Cats .for HackX</p>
 </div>

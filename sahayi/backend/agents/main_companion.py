@@ -32,8 +32,9 @@ HOW TO SOUND (etiquette):
  5. One gentle question per turn at most, and only when you genuinely need to know. Mostly listen and respond like a friend. Do NOT interrogate or rapid-fire questions.
  6. If they repeat themselves, change the topic naturally — never ask the same thing twice.
  7. Be there for ordinary life too: listen to family stories, worries, loneliness, gossip, celebrations and practical day-to-day questions with genuine warmth. Offer simple, non-medical support when useful; do not force the topic back to symptoms.
- 8. You are NOT a doctor and you never give medical advice or diagnoses. If they mention something serious (chest pain, breathlessness, falling, severe pain), calmly ask if they would like you to bring their doctor onto the call. Never tell them what medicine to take or stop.
- 8. Only respond to what the patient has ACTUALLY said this call. Never invent symptoms, events, questions, or things "they just told you". If you didn't catch something, just ask them to repeat — that's natural and fine.
+ 8. You are NOT a doctor and you never diagnose, or tell the patient to start, stop, change, or skip a medicine on their own. The medicine list below was set by their doctor — you MAY read it back to remind or help the patient (names, dose, when to take). Never invent a medicine or change the dose yourself.
+ 8b. If they mention something serious (chest pain, breathlessness, falling, severe pain), calmly ask if they would like you to bring their doctor onto the call.
+ 8c. Only respond to what the patient has ACTUALLY said this call. Never invent symptoms, events, questions, or things "they just told you". If you didn't catch something, just ask them to repeat — that's natural and fine.
 
 CONTINUITY — stay in the conversation:
 - This is turn {turn_number} of the call. {first_turn_note}
@@ -47,11 +48,15 @@ LANGUAGE — non-negotiable:
 WHAT YOU KNOW FROM PAST CALLS:
 {memory_context}
 
+THE PATIENT'S KNOWN FACTS (set by their doctor — you may read these back to help or remind, never invent or alter them):
+{patient_facts}
+
 THIS CALL SO FAR:
 {history}
 
 VOICE REPAIR:
-- Keep the spoken reply to one or two short sentences. Normally use fewer than 90 characters.
+- Keep the spoken reply to one or two short sentences by default. Normally use fewer than 90 characters.
+- When the patient asks a real factual question (their medicines, what a medicine is for, their condition, their doctor), ANSWER IT FULLY and helpfully using the KNOWN FACTS above. Read back the exact medicine names, dose, and timing. Do not dodge, do not say "the doctor's medicines" vaguely, and do not just repeat the question back.
 - Answer ordinary questions directly and plainly. Ask one follow-up only when it is genuinely needed.
 - If the caller sounds confused, says Sahayi misunderstood, criticises the call, or asks who/what Sahayi is: apologise briefly, say you will keep it simple, and ask what they need. Do not claim to be human, defend yourself, or argue.
 
@@ -107,7 +112,7 @@ class MainCompanionAgent:
         self._db = database
         self.memory.database = database
 
-    async def respond(self, patient_profile: dict, session_history: list[str], patient_text: str, lessons: str = "", detected_language: str | None = None, is_first_turn: bool = True, last_question: str = "") -> CompanionReply:
+    async def respond(self, patient_profile: dict, session_history: list[str], patient_text: str, lessons: str = "", detected_language: str | None = None, is_first_turn: bool = True, last_question: str = "", patient_facts: str = "") -> CompanionReply:
         """Generate a warm, companion-style reply in the patient's language.
 
         Args:
@@ -136,6 +141,7 @@ class MainCompanionAgent:
         if getattr(self, "_db", None) is not None:
             memory_context = await self.memory.get_context_string(patient_profile.get("id"))
 
+        facts = patient_facts or self._build_patient_facts(patient_profile)
         current_datetime = self._current_datetime_ist()
         turn_number = max(1, len(session_history) // 2 + 1)
         first_turn_note = "This is the FIRST turn of the call. Say a warm, natural hello to the patient by name — like a kind friend calling to check in. Keep it short and human." if is_first_turn else "Do not greet, just continue."
@@ -151,6 +157,7 @@ class MainCompanionAgent:
             first_turn_note=first_turn_note,
             greeting_note=greeting_note,
             last_question=last_question or "None.",
+            patient_facts=facts or "No specific records on file.",
         )
 
         max_tokens = 120 if len(patient_text.split()) <= 6 else 160
@@ -269,6 +276,59 @@ class MainCompanionAgent:
         last = parts[-2] if len(parts) >= 2 else parts[0]
         sentence = last.split("।")[-1].split(".")[-1].strip()
         return sentence + "?" if sentence else ""
+
+    @staticmethod
+    def _build_patient_facts(patient_profile: dict) -> str:
+        """Summarise the doctor-set patient records for the companion prompt.
+
+        Builds a compact, plain-language block of the patient's known conditions
+        and current prescribed medicines (names, dose, frequency, timing) plus
+        the treating doctor's name. This is observational data only — the
+        companion may read it back to remind or help the patient, never invent
+        or alter it.
+
+        Args:
+            patient_profile: Patient profile dictionary (may include
+                ``conditions`` and ``medicines`` keys).
+        Returns:
+            Multi-line facts string, or "" when nothing is recorded.
+        Agent:
+            MainCompanionAgent
+        """
+
+        lines = []
+        conditions = patient_profile.get("conditions") or []
+        if isinstance(conditions, str):
+            conditions = [c.strip() for c in conditions.split(",") if c.strip()]
+        if conditions:
+            lines.append("Conditions: " + ", ".join(str(c) for c in conditions))
+
+        medicines = patient_profile.get("medicines") or []
+        if medicines:
+            med_lines = []
+            for m in medicines:
+                if not isinstance(m, dict):
+                    continue
+                name = m.get("name") or m.get("medicine") or ""
+                if not name:
+                    continue
+                parts = [name]
+                dose = m.get("dose") or m.get("dosage")
+                freq = m.get("frequency")
+                timing = m.get("timing")
+                detail = " ".join(str(p) for p in [dose, freq, timing] if p).strip()
+                if detail:
+                    parts.append(f"({detail})")
+                med_lines.append(" ".join(parts))
+            if med_lines:
+                lines.append("Current prescribed medicines: " + "; ".join(med_lines))
+
+        doctor = patient_profile.get("doctor_contact") or {}
+        doctor_name = doctor.get("name") if isinstance(doctor, dict) else ""
+        if doctor_name:
+            lines.append(f"Treating doctor: {doctor_name}")
+
+        return "\n".join(lines)
 
     @staticmethod
     def _time_of_day() -> str:

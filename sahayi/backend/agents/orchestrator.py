@@ -106,7 +106,8 @@ class Orchestrator:
             self._last_transcripts[session_id].pop(0)
         if self._last_transcripts[session_id].count(transcript.strip().lower()) >= _LOOP_DETECT_THRESHOLD:
             self.logger.info("Loop detected | session_id=%s — steering conversation", session_id)
-            transcript = "[The patient seems to be repeating themselves. Gently acknowledge and ask about something else, like how their day is going or if they've eaten.]"
+            # Retain the patient's actual words; replacing them with a control
+            # prompt caused the companion to answer the instruction, not the caller.
 
         # Bound the live history window to keep prompts fast and cheap.
         # (Kept generous — a single call stays well within the model window so
@@ -128,6 +129,7 @@ class Orchestrator:
             patient, compacted_history, transcript, lessons=lessons,
             detected_language=detected_language, is_first_turn=is_first,
             last_question=last_question,
+            patient_facts=self.companion_agent._build_patient_facts(patient),
         )
         reply = await reply_task
         self._first_turn[session_id] = False
@@ -136,27 +138,20 @@ class Orchestrator:
         if asked:
             self._last_question[session_id] = asked
         
-        # Safety review runs immediately — risk-based routing (research,
-        # hypothesis, doctor summary) is fired off in the background so
-        # the patient hears a reply without waiting for PubMed / extra LLM calls.
-        safety = await self.safety_agent.review(reply.text, [], language_code=detected_language or patient.get("language", "en-IN"))
-        # If the safety agent had to alter the reply, that is a correction we
-        # learn from so the companion improves over time.
-        if safety.safe_response.strip() != reply.text.strip():
-            asyncio.create_task(
-                self.mistake_logger.record(
-                    agent="main_companion",
-                    mistake_type="safety",
-                    context=f"session_id={session_id}; patient_id={patient['id']}",
-                    error=reply.text,
-                    correction=safety.safe_response,
-                    patient_id=patient["id"],
-                )
-            )
+        # Safety review is a pure local heuristic (no LLM) so it adds zero
+        # latency — the patient hears the reply as soon as the companion returns.
+        # Risk-based routing (research, hypothesis, doctor summary) is fired off
+        # in the background so the patient never waits on PubMed / extra calls.
+        safety = self.safety_agent.review(reply.text, [], language_code=detected_language or patient.get("language", "en-IN"))
         await self.sockets.broadcast(patient["doctor_uid"], "safety_check", {"session_id": session_id, "patient_id": patient["id"], "safe_response": safety.safe_response})
 
         safe_reply = CompanionReply(text=safety.safe_response, used_context=reply.used_context)
         self.session_history[session_id].append(f"assistant:{safe_reply.text}")
+
+        # Safety is a pure local heuristic now (no LLM call) so it adds zero
+        # latency. The old flow awaited a second Sarvam call here, which doubled
+        # the patient-perceived delay; removing it is what makes replies fast.
+
 
         # Kick off downstream intelligence in the background — results
         # flow to the dashboard via sockets and to the database log.

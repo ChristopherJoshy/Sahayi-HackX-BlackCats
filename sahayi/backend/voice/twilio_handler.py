@@ -17,7 +17,7 @@ from db.database import DatabaseGateway
 from intelligence.emergency_caller import EmergencyCaller
 from utils.logger import get_logger
 from utils.validators import normalize_phone
-from voice.audio_codec import mulaw_to_pcm16, upsample_8k_to_16k
+from voice.audio_codec import mulaw_to_pcm16, upsample_8k_to_16k, pcm_to_wav
 from voice.sarvam_stt import SarvamSTTClient
 from voice.sarvam_tts import SarvamTTSClient
 from voice.vad import SileroVAD
@@ -52,16 +52,36 @@ class VoiceSessionState:
     vad: SileroVAD | None = None
     language: str = ""
     pcm_buffer: bytearray = field(default_factory=bytearray)
+    # 16 kHz upsampled PCM used for Silero VAD. Silero is trained on 16 kHz;
+    # feeding it 8 kHz Twilio audio corrupts speech detection and either clips
+    # real speech (garbled transcript) or never detects it. Kept separate from
+    # pcm_buffer so the STT path can still use the cleaner 16 kHz upsample.
+    pcm_buffer_16k: bytearray = field(default_factory=bytearray)
     emergency_pending: bool = False
     emergency_offered_at: datetime | None = None
     emergency_reason: str = ""
     opening: bool = False
     echo_cleared: bool = False
+    # Length of ``buffer`` (and its PCM twins) at the instant the echo window
+    # opens. We only ever trim this much when the window clears, so any patient
+    # speech that arrived *early* (during the agent's reply tail) is preserved
+    # instead of being wiped.
+    echo_open_len: int = 0
+    # Cumulative bytes of speech detected this turn, used by adaptive
+    # end-of-turn detection to pick a short vs long trailing-silence window.
+    speech_bytes: int = 0
+    # Set when the patient interrupted the agent mid-reply (barge-in). The
+    # pipeline reads this to flush the outbound buffer and pivot to the new turn.
+    barge_in_detected: bool = False
+    # When barge-in speech first became sustained, for the min-duration gate.
+    barge_in_since: datetime | None = None
     # When the last TTS reply is expected to finish playing. Inbound audio
     # arriving before this is almost always the agent's own voice echoing back
     # through the phone (Twilio media streams have no server-side echo
     # cancellation), so we must ignore it or the agent talks to itself.
     response_audio_end: datetime = field(default_factory=datetime.utcnow)
+    last_transcript: str = ""
+    last_transcript_at: datetime | None = None
 
 
 class TwilioVoiceHandler:
@@ -217,18 +237,13 @@ class TwilioVoiceHandler:
             return ("start", outbound, True)
 
         if event == "media":
-            # If we offered an emergency call and the patient has not spoken
-            # for 30s, treat silence as implicit consent and trigger the cascade.
-            if state.emergency_pending and state.emergency_offered_at:
-                elapsed = (datetime.utcnow() - state.emergency_offered_at).total_seconds()
-                if elapsed >= 30:
-                    state.emergency_pending = False
-                    if self.emergency_caller:
-                        self._register_emergency_context(state)
-                        asyncio.create_task(
-                            self._trigger_emergency(state)
-                        )
-            ready = self._accumulate_audio(state, message)
+            try:
+                ready = self._accumulate_audio(state, message)
+            except Exception:
+                # Never let a single bad audio frame kill the media-stream
+                # loop — that would leave the agent silent after the opener.
+                self.logger.exception("VAD/accumulate error | session=%s", session_id)
+                ready = False
             outbound = None
             if ready:
                 outbound = self.thinking_sounds.get_thinking_payloads(state.stream_sid, state.patient.get("language", "ml-IN"))
@@ -283,7 +298,11 @@ class TwilioVoiceHandler:
             return ("start", None, True)
 
         if event == "media":
-            ready = self._accumulate_audio(state, message)
+            try:
+                ready = self._accumulate_audio(state, message)
+            except Exception:
+                self.logger.exception("VAD/accumulate error (doctor) | session=%s", session_id)
+                ready = False
             outbound = None
             if ready:
                 outbound = self.thinking_sounds.get_thinking_payloads(state.stream_sid, state.patient.get("language", "ml-IN"))
@@ -320,6 +339,11 @@ class TwilioVoiceHandler:
 
         audio_data = bytes(state.buffer)
         state.buffer.clear()
+
+        self.logger.info(
+            "Voice turn ready | session_id=%s | inbound_mulaw_bytes=%d | opening=%s",
+            state.session_id, len(audio_data), state.opening,
+        )
 
         try:
             if state.opening:
@@ -392,10 +416,23 @@ class TwilioVoiceHandler:
     # 8 kHz mono mu-law (1 byte per sample) to stay safely under the limit.
     _MAX_BUFFER_BYTES = 160_000
 
-    # Seconds of continuous silence after speech before we trigger processing.
-    # Kept short (0.3s) so the companion replies quickly after the patient
-    # finishes a sentence — important for a natural, snappy voice feel.
-    _TRAILING_SILENCE_SECONDS = 0.3
+    # Adaptive end-of-turn detection (replaces a fixed silence threshold).
+    # A single constant either cuts people off mid-thought (too short) or adds
+    # dead air (too long). We instead vary the trailing-silence window: short
+    # for brief replies (yes/no), longer for longer speech, so the agent waits
+    # for the patient to finish without feeling sluggish. See _trailing_silence().
+    _SILENCE_SHORT_SECONDS = 0.35   # brief utterance (<= ~1.2s of speech)
+    _SILENCE_LONG_SECONDS = 0.7     # longer utterance (gives pause-to-think room)
+    _SPEECH_SHORT_BYTES = 10_000    # ~1.2s of 8kHz mu-law marks a "short" turn
+    # Minimum speech duration before we ever allow end-of-turn, so we never
+    # clip the start of a sentence on a stray breath.
+    _MIN_SPEECH_BYTES = 1_600       # ~0.2s of 8kHz mu-law
+    # Barge-in: the agent's own voice echoes back through the handset with no
+    # server-side AEC, so we keep the echo gate for this long after playback
+    # STARTS before we trust inbound VAD as a real interruption.
+    _BARGE_IN_ECHO_MARGIN_SECONDS = 0.4
+    # Sustained patient speech needed to count as barge-in (not a cough/blip).
+    _BARGE_IN_MIN_SECONDS = 0.3
 
     def _accumulate_audio(self, state: VoiceSessionState, message: dict) -> bool:
         """Buffer inbound audio and return True when ready to process.
@@ -414,11 +451,20 @@ class TwilioVoiceHandler:
         """
 
         payload = base64.b64decode(message.get("media", {}).get("payload", ""))
+
+        # Twilio mirrors outbound media onto the inbound stream. A later
+        # byte-count cleanup cannot reliably split that echo from early caller
+        # speech, so do not queue frames until playback has drained.
+        if datetime.utcnow() < state.response_audio_end:
+            return False
+
         state.buffer.extend(payload)
         
-        # Convert mu-law to PCM16 and buffer for VAD
+        # Convert mu-law to PCM16 (8 kHz) and keep a 16 kHz copy for Silero VAD,
+        # which is trained on 16 kHz and misbehaves on 8 kHz input.
         pcm_chunk = mulaw_to_pcm16(payload)
         state.pcm_buffer.extend(pcm_chunk)
+        state.pcm_buffer_16k.extend(upsample_8k_to_16k(pcm_chunk))
 
         # Trim leading (oldest) audio so we never exceed the STT limit
         overflow = len(state.buffer) - self._MAX_BUFFER_BYTES
@@ -437,16 +483,75 @@ class TwilioVoiceHandler:
         # patient said afterwards — so the agent actually hears the answer
         # instead of repeating the same question.
         if datetime.utcnow() < state.response_audio_end:
+            # Within the echo window: never trust inbound audio (it's the
+            # agent's own voice bouncing back). Keep deferring.
             state.speech_detected = False
             state.silence_start = None
+            state.barge_in_since = None
+            # Remember how much audio has piled up so far; this is the echo
+            # tail we will trim (and only trim) once the window opens.
+            if not state.echo_cleared:
+                state.echo_open_len = max(state.echo_open_len, len(state.buffer))
             state.echo_cleared = False
             return False
-        # Window just opened: clear any echo that piled up during playback.
+
+        # Past the echo window but reply still playing: this is where real
+        # barge-in can happen. If enabled, watch inbound VAD for SUSTAINED
+        # speech and treat it as the patient interrupting. We require a min
+        # duration so a cough or clipped echo tail doesn't trigger it.
+        if self.settings.barge_in_enabled and not state.barge_in_detected:
+            if not state.vad:
+                state.vad = SileroVAD()
+            speaking = False
+            while len(state.pcm_buffer_16k) >= 1024:
+                chunk = state.pcm_buffer_16k[:1024]
+                del state.pcm_buffer_16k[:1024]
+                try:
+                    if state.vad.is_speech(bytes(chunk), sample_rate=16000):
+                        speaking = True
+                        state.speech_bytes += len(chunk)
+                except Exception:
+                    pass
+            now = datetime.utcnow()
+            if speaking:
+                if state.barge_in_since is None:
+                    state.barge_in_since = now
+                elif (now - state.barge_in_since).total_seconds() >= self._BARGE_IN_MIN_SECONDS:
+                    # Confirmed interruption: stop listening to the rest of our
+                    # own reply and pivot to the patient's new turn.
+                    self.logger.info("Barge-in detected | session_id=%s", state.session_id)
+                    state.barge_in_detected = True
+                    state.speech_detected = False
+                    state.silence_start = None
+                    state.processing = True
+                    state.pcm_buffer.clear()
+                    state.pcm_buffer_16k.clear()
+                    if state.vad:
+                        state.vad.reset_state()
+                    return True
+            else:
+                state.barge_in_since = None
+            # Not a confirmed barge-in yet; keep deferring but preserve buffer.
+            return False
+        # Window just opened: clear only the echo that piled up during playback.
+        # Critically, we do NOT wipe the entire buffer. A patient who answers
+        # promptly — while the agent's reply is still draining — will already
+        # have real speech buffered. Clearing everything there would delete
+        # their first words and the agent would "hear" silence, transcribe
+        # nothing, then ask them to repeat ("can't understand what I said").
+        # We only drop the leading ``echo_open_len`` bytes captured up to the
+        # moment the window opened (the agent's own echo), leaving any patient
+        # speech that followed it intact for STT.
         if not state.echo_cleared:
-            state.buffer.clear()
-            state.pcm_buffer.clear()
+            drop = min(state.echo_open_len, len(state.buffer))
+            del state.buffer[:drop]
+            p_drop = min(state.echo_open_len, len(state.pcm_buffer))
+            del state.pcm_buffer[:p_drop]
+            p16_drop = min(state.echo_open_len * 2, len(state.pcm_buffer_16k))
+            del state.pcm_buffer_16k[:p16_drop]
             state.speech_detected = False
             state.silence_start = None
+            state.speech_bytes = 0
             if state.vad:
                 state.vad.reset_state()
             state.echo_cleared = True
@@ -455,19 +560,20 @@ class TwilioVoiceHandler:
         if not state.vad:
             state.vad = SileroVAD()
 
-        # VAD requires exactly 256 or 512 samples (512 or 1024 bytes) at 8kHz
-        # We will process chunks of 512 bytes (32ms)
+        # Silero VAD expects 16 kHz: process the upsampled buffer in 512-sample
+        # (1024-byte) frames so its internal state stays correct.
         is_speaking_now = False
         processed_any = False
         
-        while len(state.pcm_buffer) >= 512:
-            chunk = state.pcm_buffer[:512]
-            del state.pcm_buffer[:512]
-            
+        while len(state.pcm_buffer_16k) >= 1024:
+            chunk = state.pcm_buffer_16k[:1024]
+            del state.pcm_buffer_16k[:1024]
+
             try:
                 # threshold=0.5 is default in Silero
-                if state.vad.is_speech(bytes(chunk), sample_rate=8000):
+                if state.vad.is_speech(bytes(chunk), sample_rate=16000):
                     is_speaking_now = True
+                    state.speech_bytes += len(chunk)
                 processed_any = True
             except Exception as e:
                 self.logger.error("VAD error: %s", e)
@@ -479,26 +585,57 @@ class TwilioVoiceHandler:
             return False
 
         if is_speaking_now:
-            # User is speaking
+            # User is speaking — latch speech and remember *when* it last
+            # happened. We only ever move this timestamp forward (never reset
+            # it to None) so brief noise blips between words simply nudge the
+            # end-of-turn timer slightly later instead of fully restarting it.
+            # Without this, telephony audio (breaths, lip smacks, line noise)
+            # makes the silence timer reset every frame and the turn NEVER
+            # fires — the agent goes silent after the patient speaks.
             state.speech_detected = True
-            state.silence_start = None
+            state.silence_start = datetime.utcnow()
             return False
 
-        # Energy is low — if speech was detected, track trailing silence
-        if state.speech_detected:
+        # Energy is low — if we already heard speech, check how long it has
+        # been since the LAST voiced frame, not since some arbitrary pause.
+        if state.speech_detected and state.silence_start is not None:
             now = datetime.utcnow()
-            if state.silence_start is None:
-                state.silence_start = now
-            elif (now - state.silence_start).total_seconds() >= self._TRAILING_SILENCE_SECONDS:
+            if (now - state.silence_start).total_seconds() >= self._trailing_silence(state):
                 # User stopped speaking
                 state.speech_detected = False
                 state.silence_start = None
                 state.processing = True
                 state.vad.reset_state()
                 state.pcm_buffer.clear()
+                state.pcm_buffer_16k.clear()
                 return True
 
         return False
+
+    @staticmethod
+    def _trailing_silence(state: "VoiceSessionState") -> float:
+        """Adaptive trailing-silence window for end-of-turn detection.
+
+        Brief turns (yes/no, "I'm fine") get a short window so the agent answers
+        snappily; longer turns get a longer window so a natural pause-to-think
+        mid-explanation isn't mistaken for the end of the turn. A minimum speech
+        floor prevents clipping the start of a sentence on a stray breath.
+
+        Args:
+            state: Mutable voice session state (carries this turn's speech bytes).
+        Returns:
+            Trailing-silence seconds threshold.
+        Agent:
+            Voice
+        """
+
+        if state.speech_bytes < TwilioVoiceHandler._MIN_SPEECH_BYTES:
+            # Too little speech to be a real turn yet — wait longer before
+            # committing to end-of-turn so we don't chop the first word.
+            return TwilioVoiceHandler._SILENCE_LONG_SECONDS
+        if state.speech_bytes <= TwilioVoiceHandler._SPEECH_SHORT_BYTES:
+            return TwilioVoiceHandler._SILENCE_SHORT_SECONDS
+        return TwilioVoiceHandler._SILENCE_LONG_SECONDS
 
     async def process_audio_turn(self, session_id: str):
         """Run the heavy STT → orchestrator → TTS pipeline for one turn.
@@ -521,6 +658,15 @@ class TwilioVoiceHandler:
         state.buffer.clear()
 
         try:
+            # Barge-in: the patient interrupted our reply. Flush whatever is
+            # still queued in Twilio's jitter buffer so we don't keep talking
+            # over them, then pivot to their new turn.
+            if state.barge_in_detected:
+                state.barge_in_detected = False
+                state.barge_in_since = None
+                self.logger.info("Barge-in flush | session_id=%s", state.session_id)
+                yield {"event": "clear", "streamSid": state.stream_sid}
+
             # Opening line: no transcript yet — generate a natural first turn
             # from the companion so the patient hears a human voice, not a
             # canned greeting. Language matches the patient's profile default.
@@ -542,7 +688,7 @@ class TwilioVoiceHandler:
                 # TTS returned nothing (empty reply, API hiccup, timeout), fall
                 # back to a deterministic warm opener in their language so the
                 # call never starts with dead air.
-                if not reply_text:
+                if len(reply_text) < 10:
                     reply_text = self._fallback_opener(state.patient, lang)
                 audio = await self.tts.synthesize(reply_text, lang)
                 if not audio:
@@ -561,7 +707,7 @@ class TwilioVoiceHandler:
             # send at the native rate — Sarvam transcribes telephony audio best
             # at 8 kHz (upsampling was degrading recognition).
             transcript = await self.stt.transcribe(
-                mulaw_to_pcm16(audio_data), language_code="auto", sample_rate=8000
+                mulaw_to_pcm16(audio_data), language_code="ml-IN", sample_rate=8000
             )
 
             # Record the detected language for observability / future routing.
@@ -571,7 +717,11 @@ class TwilioVoiceHandler:
 
             # Reply in the language the patient actually spoke this turn. Fall
             # back to their profile default only when STT detection is empty.
-            reply_language = detected or state.patient.get("language") or None
+            reply_language = "ml-IN"
+            self.logger.info(
+                "Voice STT result | session_id=%s | language=%s | repeat=%s | transcript=%r",
+                state.session_id, detected, transcript["should_repeat"], transcript["text"],
+            )
 
             if transcript["should_repeat"]:
                 if transcript["text"]:
@@ -588,9 +738,39 @@ class TwilioVoiceHandler:
                         self._mark_response_sent(state, audio)
                         for _m in self._build_media_payload(state.stream_sid, audio):
                             yield _m
-                # If no text at all, just ignore and don't say anything to avoid a loop of "can't hear anything"
+                # If no text at all, gently ask the patient to repeat so the
+                # conversation never dies in silence (a garbled first reply used
+                # to fall through to an empty TTS and go permanently quiet).
+                elif not str(transcript["text"]).strip():
+                    repeat_msgs = {
+                        "ml-IN": "ക്ഷമിക്കണം, വ്യക്തമല്ല. വീണ്ടും പറയാമോ?",
+                        "hi-IN": "माफ़ कीजिए, स्पष्ट नहीं है। कृपया फिर से बोलें?",
+                        "ta-IN": "மன்னிக்கவும், தெளிவாக இல்லை. மீண்டும் சொல்ல முடியுமா?",
+                        "te-IN": "క్షమించండి, స్పష్టంగా లేదు. దయచేసి మళ్ళీ చెప్పగలరా?",
+                        "kn-IN": "ಕ್ಷಮಿಸಿ, ಸ್ಪಷ್ಟವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಹೇಳಿ?",
+                    }
+                    repeat_text = repeat_msgs.get(reply_language or "", repeat_msgs["ml-IN"])
+                    audio = await self.tts.synthesize(repeat_text, reply_language)
+                    if audio:
+                        self._mark_response_sent(state, audio)
+                        for _m in self._build_media_payload(state.stream_sid, audio):
+                            yield _m
             else:
                 text = str(transcript["text"])
+                normalized_text = " ".join(text.lower().split())
+                now = datetime.utcnow()
+                if (
+                    normalized_text
+                    and normalized_text == state.last_transcript
+                    and state.last_transcript_at is not None
+                    and (now - state.last_transcript_at).total_seconds() < 8
+                ):
+                    self.logger.warning(
+                        "Duplicate STT turn ignored | session_id=%s", state.session_id
+                    )
+                    return
+                state.last_transcript = normalized_text
+                state.last_transcript_at = now
 
                 # Emergency cascade: if we already asked for permission and the
                 # patient now answers (or stayed silent too long), act on it.
@@ -619,9 +799,7 @@ class TwilioVoiceHandler:
                         # it seriously and call immediately, no verification step.
                         self._register_emergency_context(state)
                         if self.emergency_caller:
-                            asyncio.create_task(
-                                self._trigger_emergency(state)
-                            )
+                            self._trigger_emergency(state)
                         confirm = {
                             "ml-IN": "ശരി, ഞാൻ ഇപ്പോൾ തന്നെ നിങ്ങളുടെ ഡോക്ടറെ വിളിക്കുന്നു.",
                             "hi-IN": "ठीक है, मैं अभी आपके डॉक्टर को कॉल कर रहा हूँ।",
@@ -652,8 +830,16 @@ class TwilioVoiceHandler:
                 turn_result = await self.orchestrator.handle_turn(
                     state.patient, state.session_id, text, detected_language=detected or None
                 )
+                self.logger.info(
+                    "Voice companion reply | session_id=%s | text=%r",
+                    state.session_id, turn_result.reply.text,
+                )
                 audio = await self.tts.synthesize(turn_result.reply.text, reply_language)
                 if audio:
+                    self.logger.info(
+                        "Voice TTS ready | session_id=%s | outbound_mulaw_bytes=%d",
+                        state.session_id, len(audio),
+                    )
                     self._mark_response_sent(state, audio)
                     for _m in self._build_media_payload(state.stream_sid, audio):
                         yield _m
@@ -776,12 +962,10 @@ class TwilioVoiceHandler:
             "ಹೌದು", "হ্যাঁ", "हो", "હા", "ਹਾਂ", "ہاں", "ok", "call", "വിളി",
         ])
         # No reply (empty text) also counts as implicit consent per the cascade.
-        if affirmative or not text.strip():
+        if affirmative:
             if self.emergency_caller:
                 self._register_emergency_context(state)
-                asyncio.create_task(
-                    self._trigger_emergency(state)
-                )
+                self._trigger_emergency(state)
             confirm = {
                 "ml-IN": "ശരി, ഞാൻ ഇപ്പോൾ തന്നെ നിങ്ങളുടെ ഡോക്ടറെ വിളിക്കുന്നു.",
                 "hi-IN": "ठीक है, मैं अभी आपके डॉक्टर को कॉल कर रहा हूँ।",
@@ -854,6 +1038,15 @@ class TwilioVoiceHandler:
             seconds=duration + margin
         )
         state.echo_cleared = False
+        state.echo_open_len = 0
+        state.speech_detected = False
+        state.silence_start = None
+        state.speech_bytes = 0
+        state.buffer.clear()
+        state.pcm_buffer.clear()
+        state.pcm_buffer_16k.clear()
+        if state.vad:
+            state.vad.reset_state()
 
     def _register_emergency_context(self, state: "VoiceSessionState") -> None:
         """Stash patient + reason so the doctor call can be briefed.

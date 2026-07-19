@@ -1,12 +1,26 @@
-# Fix doctor/patient state sharing during emergency cascade
+# Request 033 - Fix silent mid-call TTS timeout dropping turns
 
-The outbound doctor call during an emergency cascade was inadvertently sharing the active patient's `VoiceSessionState` inside `TwilioVoiceHandler.sessions`, because both the patient's incoming stream and the doctor's outbound stream used the same UUID `session_id` as the dictionary key.
+## Goal
 
-This led to the following issues:
-- When the doctor connected, it overwrote `state.stream_sid` with its own SID.
-- The patient's background processing loop (`process_audio_turn`) was still active. It saw `state.opening = True` (triggered by the doctor's connect event), generated the patient's standard opening greeting ("Are you ok?"), and dispatched it to the doctor's `stream_sid`.
-- The `process_doctor_turn` method crashed on subsequent interactions because it attempted to append to `state.session_history`, an attribute that wasn't defined on `VoiceSessionState`.
+A production voice log showed the companion's medicine answer (151 chars) never
+reached the patient: the Sarvam TTS call timed out at the hard 5s cap, returned
+empty audio, and `twilio_handler` had no fallback for a mid-call TTS failure —
+so the turn was silently dropped and the conversation degenerated into a vague
+pivot ("അതെ അതെ" -> "പിന്നെ എന്തെങ്കിലും വിശേഷങ്ങൾ?").
 
-### Changes made
-1.  **Isolated the doctor's state**: Appended `_doctor` to the `session_id` when accessing `self.sessions` inside `handle_doctor_stream_event` and `process_doctor_turn`.
-2.  **Added `session_history` attribute**: Added `session_history: list[str] = field(default_factory=list)` to `VoiceSessionState` to fix the `AttributeError`.
+## Changes
+
+- `core/config.py`: removed the hard `min(..., 5.0)` ceiling on timeouts. TTS
+  default raised to 12s (long medicine lists need more synth time); STT default
+  8s. Both remain env-overridable (`TTS_TIMEOUT`, `STT_TIMEOUT`).
+- `voice/twilio_handler.py`: added `_synthesize_with_fallback()` which retries
+  once with a sentence-boundary-trimmed reply when TTS returns nothing, plus a
+  last-resort "please repeat" prompt if TTS fails entirely — the call never goes
+  silent mid-conversation now. Added helpers `_trim_to_sentence()` and
+  `_repeat_prompt()`.
+
+## Validation
+
+- Syntax check passed; existing humanlike suite (13 tests) still passes.
+- Manual: a long reply that exceeds the TTS window should now play the trimmed
+  portion and/or ask the patient to repeat, instead of silence.

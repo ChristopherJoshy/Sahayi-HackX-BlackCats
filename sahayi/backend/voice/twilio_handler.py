@@ -836,7 +836,8 @@ class TwilioVoiceHandler:
                     "Voice companion reply | session_id=%s | text=%r",
                     state.session_id, turn_result.reply.text,
                 )
-                audio = await self.tts.synthesize(turn_result.reply.text, reply_language)
+                reply_text = (turn_result.reply.text or "").strip()
+                audio = await self._synthesize_with_fallback(reply_text, reply_language, state)
                 if audio:
                     self.logger.info(
                         "Voice TTS ready | session_id=%s | outbound_mulaw_bytes=%d",
@@ -845,6 +846,19 @@ class TwilioVoiceHandler:
                     self._mark_response_sent(state, audio)
                     for _m in self._build_media_payload(state.stream_sid, audio):
                         yield _m
+                else:
+                    # TTS failed even after retries/fallback — never leave the turn
+                    # silent. Ask the patient to repeat so the call survives.
+                    self.logger.warning(
+                        "TTS failed for companion reply | session_id=%s — asking patient to repeat",
+                        state.session_id,
+                    )
+                    repeat_text = self._repeat_prompt(reply_language)
+                    retry_audio = await self.tts.synthesize(repeat_text, reply_language)
+                    if retry_audio:
+                        self._mark_response_sent(state, retry_audio)
+                        for _m in self._build_media_payload(state.stream_sid, retry_audio):
+                            yield _m
 
         except Exception:
             self.logger.exception(
@@ -852,6 +866,87 @@ class TwilioVoiceHandler:
             )
         finally:
             state.processing = False
+
+    async def _synthesize_with_fallback(self, text: str, lang: str | None, state: "VoiceSessionState") -> bytes:
+        """Synthesize a reply, retrying once and trimming on timeout.
+
+        A long reply (e.g. a full medicine list) can exceed the TTS timeout. If
+        the first attempt returns no audio, we retry once with a shorter,
+        sentence-boundary-trimmed version so the patient still hears the most
+        important part instead of silence.
+
+        Args:
+            text: Companion reply text to speak.
+            lang: Reply language code.
+            state: Mutable voice session state (for logging context).
+        Returns:
+            Mu-law audio bytes, or empty bytes when every attempt failed.
+        Agent:
+            Voice
+        """
+        if not text:
+            return b""
+        audio = await self.tts.synthesize(text, lang)
+        if audio:
+            return audio
+        # First attempt failed (likely a timeout on a long reply). Trim to a
+        # complete sentence and retry once before giving up.
+        trimmed = self._trim_to_sentence(text)
+        if trimmed and trimmed != text:
+            self.logger.warning(
+                "TTS retry with trimmed reply | session_id=%s | before=%d after=%d",
+                state.session_id, len(text), len(trimmed),
+            )
+            audio = await self.tts.synthesize(trimmed, lang)
+            if audio:
+                return audio
+        return b""
+
+    @staticmethod
+    def _trim_to_sentence(text: str, maximum_chars: int = 160) -> str:
+        """Trim text to a complete sentence within a character budget.
+
+        Used when a full reply is too long for TTS to return in time. Prefers the
+        last sentence terminator before the cap so the spoken fragment still ends
+        cleanly.
+
+        Args:
+            text: Full reply text.
+            maximum_chars: Maximum character count before trimming.
+        Returns:
+            The original text or a sentence-boundary prefix.
+        Agent:
+            Voice
+        """
+        value = (text or "").strip()
+        if len(value) <= maximum_chars:
+            return value
+        prefix = value[:maximum_chars]
+        for sep in ["\n", "।", ".", "?"]:
+            idx = prefix.rfind(sep)
+            if idx > maximum_chars * 0.4:
+                return prefix[: idx + 1].strip()
+        return prefix.rsplit(" ", 1)[0].strip()
+
+    @staticmethod
+    def _repeat_prompt(lang: str | None) -> str:
+        """Short 'please repeat' line used when TTS fails entirely.
+
+        Args:
+            lang: Language code for the prompt.
+        Returns:
+            A brief repeat-request string in the patient's language.
+        Agent:
+            Voice
+        """
+        prompts = {
+            "ml-IN": "ക്ഷമിക്കണം, വ്യക്തമല്ല. വീണ്ടും പറയാമോ?",
+            "hi-IN": "माफ़ कीजिए, स्पष्ट नहीं है। कृपया फिर से बोलें?",
+            "ta-IN": "மன்னிக்கவும், தெளிவாக இல்லை. மீண்டும் சொல்ல முடியுமா?",
+            "te-IN": "క్షమించండి, స్పష్టంగా లేదు. దయచేసి మళ్ళీ చెప్పగలరా?",
+            "kn-IN": "ಕ್ಷಮಿಸಿ, ಸ್ಪಷ್ಟವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಹೇಳಿ?",
+        }
+        return prompts.get(lang or "", prompts["ml-IN"])
 
     @staticmethod
     def _fallback_opener(patient: dict, lang: str | None) -> str:

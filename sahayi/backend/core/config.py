@@ -59,6 +59,7 @@ class Settings:
     vad_silence_threshold: float
     tts_timeout: float
     stt_timeout: float
+    barge_in_enabled: bool
 
     @property
     def frontend_origins(self) -> tuple[str, ...]:
@@ -150,8 +151,16 @@ def get_settings() -> Settings:
         secret_key=_read("SECRET_KEY"),
         frontend_url=_read("FRONTEND_URL", "http://localhost:5173"),
         sarvam_tts_speed=float(_read("SARVAM_TTS_SPEED", "0.92")),
-        thinking_sounds_enabled=_read("THINKING_SOUNDS_ENABLED", "true").lower() == "true",
+        # Thinking sounds (a pre-synth "Hmm..." before each reply) are OFF by
+        # default — they read as robotic and the companion prompt already teaches
+        # natural, filler-free speech. Set THINKING_SOUNDS_ENABLED=true to enable.
+        thinking_sounds_enabled=_read("THINKING_SOUNDS_ENABLED", "false").lower() == "true",
         vad_silence_threshold=float(_read("VAD_SILENCE_THRESHOLD", "0.35")),
-        tts_timeout=float(_read("TTS_TIMEOUT", "8.0")),
-        stt_timeout=float(_read("STT_TIMEOUT", "7.0")),
+        barge_in_enabled=_read("BARGE_IN_ENABLED", "false").lower() == "true",
+        # Timeouts are configurable via env with safe defaults. No hard ceiling is
+        # imposed: a too-tight TTS cap silently drops a turn (patient hears nothing),
+        # so the cap was removed in favour of a generous default plus retry/fallback
+        # handling at the call site (see twilio_handler).
+        tts_timeout=float(_read("TTS_TIMEOUT", "12.0")),
+        stt_timeout=float(_read("STT_TIMEOUT", "8.0")),
     )

@@ -106,8 +106,17 @@ class Orchestrator:
             self._last_transcripts[session_id].pop(0)
         if self._last_transcripts[session_id].count(transcript.strip().lower()) >= _LOOP_DETECT_THRESHOLD:
             self.logger.info("Loop detected | session_id=%s — steering conversation", session_id)
-            # Retain the patient's actual words; replacing them with a control
-            # prompt caused the companion to answer the instruction, not the caller.
+            # Retain the patient's actual words; instead of replacing them with a
+            # control prompt (which made the companion answer the instruction), we
+            # pass a gentle steer so the model pivots to a fresh, lighter topic.
+            loop_steer = (
+                "The patient seems to be repeating themselves. Do NOT echo or "
+                "re-ask the same thing. Gently change to a NEW, lighter subject "
+                "(how they slept, family, a medicine reminder, their mood) and "
+                "keep the tone warm and natural."
+            )
+        else:
+            loop_steer = ""
 
         # Bound the live history window to keep prompts fast and cheap.
         # (Kept generous — a single call stays well within the model window so
@@ -130,6 +139,7 @@ class Orchestrator:
             detected_language=detected_language, is_first_turn=is_first,
             last_question=last_question,
             patient_facts=self.companion_agent._build_patient_facts(patient),
+            loop_steer=loop_steer,
         )
         reply = await reply_task
         self._first_turn[session_id] = False

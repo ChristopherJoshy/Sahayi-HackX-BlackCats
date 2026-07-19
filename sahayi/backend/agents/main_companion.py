@@ -29,17 +29,26 @@ HOW TO SOUND (etiquette):
  2. Mirror their mood. If they sound tired or low, soften your voice and keep it calm. If they are cheerful, warm up with them.
  3. Never open with robotic filler — no "Hmm...", "I understand", "As an AI", "Understood", or long thinking sounds. Just talk, like a person who heard them.
  4. Use everyday spoken language, not formal or corporate phrasing ("Got it" not "I have understood"). Skip "I" often.
- 5. One gentle question per turn at most, and only when you genuinely need to know. Mostly listen and respond like a friend. Do NOT interrogate or rapid-fire questions.
+ 5. LISTEN FAR MORE THAN YOU TALK. You are mostly a warm, attentive presence. Respond to what the patient actually shared; only ask a gentle question when you genuinely need to know. Do NOT interrogate or rapid-fire questions.
  6. If they repeat themselves, change the topic naturally — never ask the same thing twice.
  7. Be there for ordinary life too: listen to family stories, worries, loneliness, gossip, celebrations and practical day-to-day questions with genuine warmth. Offer simple, non-medical support when useful; do not force the topic back to symptoms.
  8. You are NOT a doctor and you never diagnose, or tell the patient to start, stop, change, or skip a medicine on their own. The medicine list below was set by their doctor — you MAY read it back to remind or help the patient (names, dose, when to take). Never invent a medicine or change the dose yourself.
  8b. If they mention something serious (chest pain, breathlessness, falling, severe pain), calmly ask if they would like you to bring their doctor onto the call.
  8c. Only respond to what the patient has ACTUALLY said this call. Never invent symptoms, events, questions, or things "they just told you". If you didn't catch something, just ask them to repeat — that's natural and fine.
 
-CONTINUITY — stay in the conversation:
+CONVERSATION FLOW — be a natural listener, never an echo:
+- Your job is to KEEP THE CHAT ALIVE like a caring relative on the phone, not to fire a questionnaire. After the patient speaks, first acknowledge what they said in your own warm words, THEN, only if it fits, add one small thing that moves the moment forward — a gentle follow-up, a recall from a past call, a soft observation, or (when the talk stalls) a new light subject.
+- NEVER make your reply just a repetition of the patient's own words or a parroting of their last sentence. That feels like a robot. React to the MEANING and continue.
+- NEVER re-ask a question the patient has already answered this call (see PRIOR QUESTION). If you already asked, move on to something else.
+- If the patient's turn is very short or the conversation stalls, gently change to a DIFFERENT, lighter subject than before (how they slept, what they ate, family, the garden, a medicine reminder, their mood). Do not circle the same topic.
+- If you remember something from a PAST call (see "What you know from past calls"), you may bring it up naturally ("Last time you said your grandson was visiting — did he come?"). Only when it fits; never force it.
+
+WINDING DOWN:
 - This is turn {turn_number} of the call. {first_turn_note}
+- After several turns (roughly turn 6 onward), or whenever the patient sounds done, tired, or ready to go, warmly close the call instead of starting yet another question: something like "Okay chechi, I'll call again soon — you take care now." Keep it short and kind. Do not drag the conversation past the patient's comfort.
+
+CONTINUITY — stay in the conversation:
 - React to what they just said like a person: acknowledge the feeling, build on it, refer back to earlier in THIS call when it fits.
-- If you remember something from a PAST call (see "What you know from past calls" below), you may bring it up naturally ("Last time you said your grandson was visiting — did he come?"). Only when it fits; never force it. If nothing is remembered, just be present in this call.
 - After the first turn, never greet again and never say "hello". Just keep the chat going.
 
 LANGUAGE — non-negotiable:
@@ -56,18 +65,22 @@ THIS CALL SO FAR:
 
 VOICE REPAIR:
 - Keep the spoken reply to one or two short sentences by default. Normally use fewer than 90 characters.
+- LISTEN and continue, do not echo. React to the patient's meaning and add something new (a gentle follow-up or a new light topic) — never just repeat their sentence back as your reply.
 - When the patient asks a real factual question (their medicines, what a medicine is for, their condition, their doctor), ANSWER IT FULLY and helpfully using the KNOWN FACTS above. Read back the exact medicine names, dose, and timing. Do not dodge, do not say "the doctor's medicines" vaguely, and do not just repeat the question back.
 - Answer ordinary questions directly and plainly. Ask one follow-up only when it is genuinely needed.
 - If the caller sounds confused, says Sahayi misunderstood, criticises the call, or asks who/what Sahayi is: apologise briefly, say you will keep it simple, and ask what they need. Do not claim to be human, defend yourself, or argue.
 
-The reply must address a concrete detail from the latest patient turn. Do not
-reply only with a generic acknowledgement when usable words are present.
+The reply must address a concrete detail from the latest patient turn and move
+the conversation forward — never repeat the patient's own words as the reply.
 
 PRIOR QUESTION (do not repeat it after the patient answers):
 {last_question}
 
 LESSONS FROM PAST MISTAKES (follow gently):
 {lessons}
+
+CONVERSATION STEER (only when the call is looping — follow it, then ignore):
+{loop_steer}
 
 TIME AWARENESS:
 - Current date and time: {current_datetime}. {greeting_note}
@@ -112,7 +125,7 @@ class MainCompanionAgent:
         self._db = database
         self.memory.database = database
 
-    async def respond(self, patient_profile: dict, session_history: list[str], patient_text: str, lessons: str = "", detected_language: str | None = None, is_first_turn: bool = True, last_question: str = "", patient_facts: str = "") -> CompanionReply:
+    async def respond(self, patient_profile: dict, session_history: list[str], patient_text: str, lessons: str = "", detected_language: str | None = None, is_first_turn: bool = True, last_question: str = "", patient_facts: str = "", loop_steer: str = "") -> CompanionReply:
         """Generate a warm, companion-style reply in the patient's language.
 
         Args:
@@ -158,9 +171,10 @@ class MainCompanionAgent:
             greeting_note=greeting_note,
             last_question=last_question or "None.",
             patient_facts=facts or "No specific records on file.",
+            loop_steer=loop_steer or "None — continue naturally.",
         )
 
-        max_tokens = 120 if len(patient_text.split()) <= 6 else 160
+        max_tokens = 8094
         prompt = f"Patient: {patient_text}"
         
         reply = await self.ai.ask_text(
@@ -238,14 +252,20 @@ class MainCompanionAgent:
         return non_indic / total > 0.5
 
     @staticmethod
-    def _limit_voice_reply(text: str, maximum_chars: int = 120) -> str:
-        """Cap a spoken reply at a natural word boundary for low-latency TTS.
+    def _limit_voice_reply(text: str, maximum_chars: int = 200) -> str:
+        """Cap a spoken reply at a natural sentence boundary for low-latency TTS.
+
+        Keeps the reply short enough to avoid a long TTS block (which delays the
+        patient's next turn) while preserving a COMPLETE thought — it prefers to
+        cut at the last sentence end (Malayalam ``।``, ``.``, ``?``, or newline)
+        before falling back to a word boundary. This stops the companion from
+        sounding chopped or robotic.
 
         Args:
             text: Model-generated spoken response.
             maximum_chars: Maximum character count before trimming.
         Returns:
-            The original reply or a complete word-boundary prefix.
+            The original reply or a complete sentence/word-boundary prefix.
         Agent:
             MainCompanionAgent
         """
@@ -253,8 +273,15 @@ class MainCompanionAgent:
         value = (text or "").strip()
         if len(value) <= maximum_chars:
             return value
-        clipped = value[:maximum_chars].rsplit(" ", 1)[0].strip()
-        return clipped or value[:maximum_chars].strip()
+        # Prefer ending at the last sentence terminator before the cap so the
+        # patient hears a finished idea, not a mid-sentence fragment.
+        prefix = value[:maximum_chars]
+        for sep in ["\n", "।", ".", "?"]:
+            idx = prefix.rfind(sep)
+            if idx > maximum_chars * 0.4:
+                return prefix[: idx + 1].strip()
+        clipped = prefix.rsplit(" ", 1)[0].strip()
+        return clipped or prefix.strip()
 
     @staticmethod
     def last_question(reply_text: str) -> str:

@@ -785,14 +785,19 @@ class TwilioVoiceHandler:
                     return
 
                 # Detect a red-flag symptom OR an explicit request to call the
-                # doctor. Sarvam's confidence is a language-ID probability (often
-                # low for Indic even on perfect audio), so we only drop obviously
-                # garbled transcripts — the echo guard already prevents the agent
-                # from triggering itself.
-                red_flag_conf = float(transcript.get("confidence") or 0.0)
+                # doctor. Sarvam's "confidence" is a language-ID probability (often
+                # low for Indic even on perfect audio), so it is NEVER used to
+                # suppress an emergency — a missed red flag is dangerous. We only
+                # skip when the transcript is empty (handled above).
                 is_red_flag = self._is_red_flag(text)
                 is_call_request = self._requests_doctor_call(text)
-                if not state.emergency_pending and red_flag_conf >= 0.3 and (is_red_flag or is_call_request):
+                # A red-flag symptom combined with any mention of the doctor or
+                # calling is treated as an explicit call request (e.g. "എനിക്ക്
+                # ഹൃദയവേദന, ഡോക്ടറിനെ വിളിക്കാമോ" — heart pain + call the doctor).
+                if is_red_flag and ("ഡോക്ട" in text.lower() or "വിളി" in text.lower()
+                                    or "doctor" in text.lower() or "call" in text.lower()):
+                    is_call_request = True
+                if not state.emergency_pending and (is_red_flag or is_call_request):
                     state.emergency_pending = True
                     state.emergency_offered_at = datetime.utcnow()
                     state.emergency_reason = text
@@ -975,25 +980,43 @@ class TwilioVoiceHandler:
     def _is_red_flag(text: str) -> bool:
         """Detect red-flag emergency keywords in a transcript.
 
+        Uses broad root-word/substring matching (not exact phrases) because STT
+        produces many natural variants of the same idea ("ഹൃദയവേദന", "നെഞ്ച്
+        വേദന", "ഡോക്ടറിനെ വിളിക്കാമോ"). Missing a real red flag is far worse than
+        a rare false positive, and the confirmation step below keeps false
+        positives safe.
+
         Args:
             text: Patient transcript text.
         Returns:
-            True when chest pain, breathlessness, or collapse is mentioned.
+            True when chest/heart pain, breathlessness, collapse, or another
+            serious symptom is mentioned.
         Agent:
             Voice
         """
 
-        lowered = text.lower()
+        lowered = (text or "").lower()
         markers = [
-            "chest pain", "നെഞ്ച്", "heart pain", "breathless", "breathing",
-            "ശ്വാസം", "കടുക്കുന്നു", "faint", "collapse", "dizzy", "ചുവന്ന",
-            "unconscious", "ബോധമില്ല", "severe pain", "കടുത്ത വേദന",
+            # Chest / heart
+            "chest pain", "heart pain", "നെഞ്ച്", "ഹൃദയ", "ഹൃദയവേദന",
+            # Breathing
+            "breathless", "breathing", "ശ്വാസം", "ശ്വാസതടസ്സം",
+            # Collapse / unconscious
+            "faint", "collapse", "dizzy", "ചുവന്ന", "unconscious", "ബോധമില്ല",
+            "വീഴുക", "വീണു",
+            # Severe pain (root word catches "കടുത്ത വേദന", "വേദനിക്കുന്നു", etc.)
+            "severe pain", "കടുത്ത", "വേദന",
         ]
         return any(token in lowered for token in markers)
 
     @staticmethod
     def _requests_doctor_call(text: str) -> bool:
         """Detect an explicit patient request to contact the doctor.
+
+        Uses broad substring matching on the roots "വിളി" (call), "ഡോക്ട" (doctor)
+        and English equivalents so natural phrasings like "ഡോക്ടറിനെ ഒന്ന്
+        വിളിക്കാമോ" / "doctorine call cheyyamo" are caught. Missing a real request
+        is dangerous, so we err toward detection and confirm via the offer step.
 
         Args:
             text: Patient transcript text.
@@ -1005,9 +1028,9 @@ class TwilioVoiceHandler:
 
         lowered = (text or "").lower()
         markers = [
-            "call the doctor", "call doctor", "ഡോക്ടറെ വിളിക്കൂ", "ഡോക്ടർ വിളിക്കണം",
-            "ഡോക്ടറെ വിളിക്കണം", "contact the doctor", "ഡോക്ടറെ വിളിപ്പിക്കൂ",
-            "ഡോക്ടറെ വിളിച്ചോളൂ", "get the doctor", "ഡോക്ടർ വിളിച്ചാൽ",
+            "call the doctor", "call doctor", "contact the doctor",
+            "get the doctor", "doctor", "ഡോക്ട", "വിളി", "വിളിക്ക",
+            "വൈദ്യൻ", "വൈദ്യൻ",
         ]
         return any(token in lowered for token in markers)
 

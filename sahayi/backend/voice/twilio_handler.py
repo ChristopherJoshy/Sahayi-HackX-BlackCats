@@ -82,6 +82,7 @@ class VoiceSessionState:
     response_audio_end: datetime = field(default_factory=datetime.utcnow)
     last_transcript: str = ""
     last_transcript_at: datetime | None = None
+    session_history: list[str] = field(default_factory=list)
 
 
 class TwilioVoiceHandler:
@@ -277,8 +278,9 @@ class TwilioVoiceHandler:
         """
 
         message = json.loads(raw_message)
-        state = self.sessions.get(session_id)
-        if not state:
+        doctor_key = f"{session_id}_doctor"
+        state = self.sessions.get(doctor_key)
+        if not state and message.get("event") != "start":
             return ("unknown", None, False)
 
         event = message.get("event")
@@ -286,12 +288,12 @@ class TwilioVoiceHandler:
         if event == "start":
             # Ensure a fresh doctor-side state exists (the patient call may
             # have ended and popped the original session state).
-            if session_id not in self.sessions:
+            if doctor_key not in self.sessions:
                 ctx = self.emergency_contexts.get(session_id, {})
-                self.sessions[session_id] = VoiceSessionState(
+                self.sessions[doctor_key] = VoiceSessionState(
                     session_id=session_id, patient=ctx.get("patient", {})
                 )
-            state = self.sessions[session_id]
+            state = self.sessions[doctor_key]
             state.stream_sid = message.get("start", {}).get("streamSid", "")
             state.opening = True
             state.processing = True
@@ -314,7 +316,7 @@ class TwilioVoiceHandler:
             return ("mark", None, False)
 
         if event == "stop":
-            await self._on_stop(state)
+            self.sessions.pop(doctor_key, None)
             return ("stop", None, False)
 
         return (event or "unknown", None, False)
@@ -333,7 +335,7 @@ class TwilioVoiceHandler:
             Voice
         """
 
-        state = self.sessions.get(session_id)
+        state = self.sessions.get(f"{session_id}_doctor")
         if not state:
             return
 
